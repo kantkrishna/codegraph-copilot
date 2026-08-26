@@ -5,7 +5,7 @@
 
 from unittest.mock import MagicMock, patch
 from fastapi.testclient import TestClient
-import httpx
+import httpx2
 import openai
 import pytest
 
@@ -13,10 +13,10 @@ from backend.main import app
 
 client = TestClient(app)
 
-# Helper to generate a mock httpx.Response for openai errors
-def _mock_response(status_code: int) -> httpx.Response:
-    request = httpx.Request("POST", "https://api.openai.com/v1/chat/completions")
-    return httpx.Response(status_code=status_code, request=request)
+# Helper to generate a mock httpx2.Response for openai errors
+def _mock_response(status_code: int) -> httpx2.Response:
+    request = httpx2.Request("POST", "https://api.openai.com/v1/chat/completions")
+    return httpx2.Response(status_code=status_code, request=request)
 
 def test_llm_test_endpoint_empty_prompt() -> None:
     """Assert POSTing an empty prompt returns a 400 Bad Request."""
@@ -53,7 +53,7 @@ def test_llm_test_endpoint_auth_failure(mock_call_llm: MagicMock) -> None:
 @patch("backend.main.call_llm")
 def test_llm_test_endpoint_timeout(mock_call_llm: MagicMock) -> None:
     """Assert timeout exceptions yield a 504 Gateway Timeout."""
-    mock_call_llm.side_effect = openai.APITimeoutError(request=_mock_response(408).request) # type: ignore
+    mock_call_llm.side_effect = openai.APITimeoutError(request=_mock_response(408).request)
     response = client.post("/api/v1/chat/test", json={"prompt": "Hello"})
     
     assert response.status_code == 504
