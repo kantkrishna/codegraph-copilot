@@ -1,15 +1,15 @@
 # pyproject.toml
 
-# This file configures the UV project dependencies, Pytest coverage rules, 
-# and strict type-checking settings for Mypy.
-
 [project]
-name = "codegraph-copilot"
+name = "codegraph-engineering-copilot"
 version = "0.1.0"
-description = "Codegraph AI Engineering Chatbot"
+description = "AI Engineering Chatbot MVP"
 requires-python = ">=3.10"
 dependencies = [
+    "fastapi[standard]>=0.141.1",
+    "openai>=3.3.1",
     "pydantic>=2.0.0",
+    "pydantic-settings>=2.15.0",
 ]
 
 [dependency-groups]
@@ -17,13 +17,29 @@ dev = [
     "pytest>=8.0.0",
     "pytest-cov>=5.0.0",
     "mypy>=1.0.0",
+    "httpx>=0.28.1",
 ]
 
 [tool.pytest.ini_options]
 addopts = "--cov=backend --cov-report=term-missing --cov-fail-under=80"
 testpaths = ["tests"]
+pythonpath = ["."]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+    "ignore::UserWarning"
+]
 
 [tool.mypy]
 strict = true
+disallow_untyped_decorators = false
 warn_return_any = true
 show_error_codes = true
+plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+module = [
+    "fastapi.*",
+    "httpx.*",
+    "openai.*"
+]
+ignore_missing_imports = true

@@ -24,6 +24,7 @@ def test_find_entity_request_valid() -> None:
 
 def test_find_entity_request_invalid_strict_type() -> None:
     with pytest.raises(ValidationError):
+        # Tell mypy to ignore this intentional type violation
         FindEntityRequest(name=123)  # type: ignore
 
 def test_get_relationships_request_valid() -> None:
@@ -37,6 +38,7 @@ def test_get_relationships_request_valid() -> None:
 
 def test_get_relationships_request_invalid_direction() -> None:
     with pytest.raises(ValidationError):
+        # Tell mypy to ignore this intentional type violation
         GetRelationshipsRequest(entity_name="UserService", direction="diagonal")  # type: ignore
 
 def test_dependency_requests_default_depth() -> None:
@@ -44,6 +46,7 @@ def test_dependency_requests_default_depth() -> None:
     assert dep_req.depth == 1
     
     with pytest.raises(ValidationError):
+        # Tell mypy to ignore this intentional type violation
         FindDependenciesRequest(entity_name="AuthService", depth="two")  # type: ignore
 
 def test_hybrid_search_request_valid() -> None:
@@ -57,7 +60,7 @@ def test_grounded_answer_schema() -> None:
         answer="Auth starts in AuthController.",
         flow=["AuthController", "AuthService"],
         evidence=["Knowledge Graph: AuthController -> AuthService", "Source: AuthController.java"],
-        confidence=ConfidenceEnum.HIGH   # <-- FIXED: Pass Enum instance directly, removed type: ignore
+        confidence=ConfidenceEnum.HIGH
     )
     assert len(req.flow) == 2
     assert "AuthController.java" in req.evidence[1]
