@@ -12,6 +12,7 @@ client = openai.Client(
     api_key=settings.llm_api_key,
 )
 
+
 def call_llm(prompt: str) -> str:
     """
     Sends a basic text prompt to the LLM and returns the string response.
@@ -19,6 +20,6 @@ def call_llm(prompt: str) -> str:
     response = client.chat.completions.create(
         model=settings.llm_model,
         messages=[{"role": "user", "content": prompt}],
-        timeout=30.0  # Slightly longer timeout for local model spin-up
+        timeout=30.0,  # Slightly longer timeout for local model spin-up
     )
     return response.choices[0].message.content or ""
