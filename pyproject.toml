@@ -7,6 +7,7 @@ description = "AI Engineering Chatbot MVP"
 requires-python = ">=3.10"
 dependencies = [
     "fastapi[standard]>=0.141.1",
+    "neo4j>=6.3.1",
     "openai>=3.3.1",
     "pydantic>=2.0.0",
     "pydantic-settings>=2.15.0",

@@ -10,37 +10,36 @@ KG_TOOLS: List[ChatCompletionToolParam] = [
         "type": "function",
         "function": {
             "name": "find_entity",
-            "description": "Search for a specific entity by name in the codebase.",
+            "description": "Searches the Knowledge Graph for a specific entity. Always use this first to get the entity_id.",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "name": {
-                        "type": "string",
-                        "description": "The exact name of the entity.",
+                    "name": {"type": "string", "description": "The name of the component (e.g., frontend, PaymentService)"},
+                    "entity_type": {
+                        "type": "string", 
+                        "enum": ["Service", "Class", "Function", "File", "Database", "Unknown"],
+                        "description": "If the user asks for a service, pass 'Service'."
                     }
                 },
-                "required": ["name"],
-            },
-        },
+                "required": ["name"]
+            }
+        }
     },
     {
         "type": "function",
         "function": {
             "name": "get_relationships",
-            "description": "Retrieve the surrounding relationships for a verified entity.",
+            "description": "Retrieves all relationships for an entity. Use this specifically to find source code files belonging to a service by passing direction='inbound'.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "entity_id": {"type": "string"},
-                    "direction": {
-                        "type": "string",
-                        "enum": ["inbound", "outbound", "both"],
-                    },
-                    "relationship_type": {"type": "string"},
+                    "direction": {"type": "string", "enum": ["outbound", "inbound", "both"]},
+                    "relationship_type": {"type": "string", "nullable": True}
                 },
-                "required": ["entity_id", "direction"],
-            },
-        },
+                "required": ["entity_id", "direction"]
+            }
+        }
     },
     {
         "type": "function",

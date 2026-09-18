@@ -13,9 +13,11 @@ class Settings(BaseSettings):
     llm_model: str = "qwen2.5-coder:3b"
     llm_api_key: str = "ollama"
 
-    model_config = SettingsConfigDict(
-        env_file=".env", env_file_encoding="utf-8", extra="ignore"
-    )
+    # Neo4j Graph Database Settings
+    neo4j_uri: str = "bolt://localhost:7687"
+    neo4j_user: str = "neo4j"
+    neo4j_password: str = "password"
 
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 settings = Settings()
