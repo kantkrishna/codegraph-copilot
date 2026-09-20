@@ -1,0 +1,140 @@
+<!-- frontend/index.html -->
+
+<!-- This file provides the Minimal Web Chat Interface satisfying US-4.2 and US-4.3, 
+     rendering Markdown and distinguishing Evidence segments without external build tools. -->
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CodeGraph Engineering Copilot</title>
+    <!-- Use marked.js for Markdown parsing -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <style>
+        body { 
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; 
+            margin: 0; padding: 0; display: flex; flex-direction: column; height: 100vh; background-color: #f4f4f9; 
+        }
+        header { background: #002b36; color: #fff; padding: 1rem; text-align: center; }
+        #chat-container { 
+            flex: 1; overflow-y: auto; padding: 1.5rem; display: flex; flex-direction: column; 
+            gap: 1rem; max-width: 900px; margin: 0 auto; width: 100%; box-sizing: border-box;
+        }
+        .message { padding: 1rem 1.5rem; border-radius: 8px; max-width: 85%; line-height: 1.6; }
+        .user-msg { background: #007bff; color: white; align-self: flex-end; }
+        .bot-msg { background: #ffffff; color: #333; align-self: flex-start; border: 1px solid #ddd; box-shadow: 0 2px 4px rgba(0,0,0,0.05); width: 100%; box-sizing: border-box; }
+        .bot-msg h3 { margin-top: 0; color: #002b36; }
+        .bot-msg pre { background: #f0f0f0; padding: 10px; border-radius: 5px; overflow-x: auto;}
+        .bot-msg code { font-family: monospace; background: #f0f0f0; padding: 2px 4px; border-radius: 3px; }
+        
+        .input-container { padding: 1.5rem; background: #fff; border-top: 1px solid #ddd; display: flex; justify-content: center; }
+        form { display: flex; gap: 0.5rem; max-width: 900px; width: 100%; }
+        input[type="text"] { flex: 1; padding: 0.75rem; border: 1px solid #ccc; border-radius: 4px; font-size: 1rem; }
+        button { padding: 0.75rem 1.5rem; background: #002b36; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 1rem; font-weight: bold; }
+        button:disabled { background: #999; cursor: not-allowed; }
+        
+        .loading { font-style: italic; color: #666; background: transparent; border: none; box-shadow: none; }
+        
+        /* US-4.3 Evidence and Confidence Distinction Styling */
+        .evidence-wrapper { background-color: #f1f8ff; border-left: 4px solid #007bff; padding: 0.1rem 1rem; margin-top: 1.5rem; border-radius: 0 4px 4px 0; }
+        .confidence-wrapper { background-color: #fff8f1; border-left: 4px solid #f0ad4e; padding: 0.1rem 1rem; margin-top: 1rem; border-radius: 0 4px 4px 0; }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>CodeGraph Engineering Copilot</h1>
+    </header>
+    
+    <div id="chat-container">
+        <div class="message bot-msg">Hello! I am the CodeGraph Engineering Copilot. Ask me about the system architecture, dependencies, or codebase flows.</div>
+    </div>
+    
+    <div class="input-container">
+        <form id="chat-form">
+            <input type="text" id="prompt" placeholder="e.g., What components depend on PaymentService?" required autocomplete="off" />
+            <button type="submit" id="send-btn">Send</button>
+        </form>
+    </div>
+
+    <script>
+        const chatContainer = document.getElementById('chat-container');
+        const chatForm = document.getElementById('chat-form');
+        const promptInput = document.getElementById('prompt');
+        const sendBtn = document.getElementById('send-btn');
+
+        /**
+         * US-4.3: Processes raw Markdown to wrap the Evidence and Confidence sections 
+         * in styled HTML blocks before passing it to marked.js.
+         */
+        function formatGroundedResponse(markdown) {
+            let html = marked.parse(markdown);
+            
+            // Encapsulate Evidence
+            html = html.replace(/<h3[^>]*>Evidence<\/h3>/g, '<div class="evidence-wrapper"><h3>Evidence</h3>');
+            // Encapsulate Confidence and close Evidence
+            html = html.replace(/<h3[^>]*>Confidence<\/h3>/g, '</div><div class="confidence-wrapper"><h3>Confidence</h3>');
+            
+            // Close the final div if Confidence block was appended
+            if (html.includes('confidence-wrapper')) {
+                html += '</div>';
+            } else if (html.includes('evidence-wrapper')) {
+                html += '</div>'; // Close evidence if no confidence existed
+            }
+            
+            return html;
+        }
+
+        function addMessage(text, className, id = null, isHtml = false) {
+            const el = document.createElement('div');
+            el.className = 'message ' + className;
+            if (id) el.id = id;
+            
+            if (isHtml) {
+                el.innerHTML = text;
+            } else {
+                el.textContent = text;
+            }
+            
+            chatContainer.appendChild(el);
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+        }
+
+        chatForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const prompt = promptInput.value.trim();
+            if (!prompt) return;
+
+            addMessage(prompt, 'user-msg');
+            promptInput.value = '';
+            sendBtn.disabled = true;
+
+            const loadingId = 'loading-' + Date.now();
+            addMessage('Thinking...', 'bot-msg loading', loadingId);
+
+            try {
+                const response = await fetch('/api/v1/chat', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ prompt })
+                });
+                
+                const data = await response.json();
+                document.getElementById(loadingId).remove();
+                
+                if (response.ok) {
+                    addMessage(formatGroundedResponse(data.response), 'bot-msg', null, true);
+                } else {
+                    addMessage('Error: ' + (data.detail || 'Failed to fetch response.'), 'bot-msg');
+                }
+            } catch (error) {
+                document.getElementById(loadingId).remove();
+                addMessage('Network Error: Could not connect to the Copilot API.', 'bot-msg');
+            } finally {
+                sendBtn.disabled = false;
+                promptInput.focus();
+            }
+        });
+    </script>
+</body>
+</html>

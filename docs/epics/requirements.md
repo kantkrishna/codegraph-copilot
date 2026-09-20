@@ -16,6 +16,9 @@
   * [US-3.2: Context Orchestration (Multi-Tool Routing)](#us-32-context-orchestration-multi-tool-routing)]
   * [US-3.3: Enforce Grounded Response Formatting & Evidence Citation](#us-33-enforce-grounded-response-formatting--evidence-citation)
 * [Epic 4: Minimal Viable User Interface](#epic-4-minimal-viable-user-interface)
+  * [US-4.1: Expose Chat Orchestrator via REST API](#us-41-expose-chat-orchestrator-via-rest-api)
+  * [US-4.2: Build Minimal Web Chat Interface](#us-42-build-minimal-web-chat-interface)
+  * [US-4.3: Render Markdown and Evidence Display](#us-43-render-markdown-and-evidence-display)
 * [Epic 5: MVP Evaluation and Handoff](#epic-5-mvp-evaluation-and-handoff)
 
 ---
@@ -433,10 +436,107 @@ Here is the minimal logical set of user stories to deliver Epic 3.
 # Epic 4: Minimal Viable User Interface
 
 * **Objective:** Build a simple, functional interface (Web UI or CLI) for developers to interact with the Copilot.
+* 
 * **Key Deliverables:**
 * A basic chat interface supporting session-based conversation history.
 * Clear visual distinction between the LLM's explanation and the retrieved evidence/sources.
 * Implementation of loading states and error handling for missing information.
+
+### Analysis of Epic 3 Scope
+
+With the backend intelligence complete, Epic 4 focuses on wrapping the orchestrator in a production-ready REST endpoint and building a lightweight web interface. This fulfills the Master Prompt's requirement for a simple UI with conversation history, loading states, and evidence display.
+
+Here are the implementation-ready User Stories for Epic 4.
+
+#### US-4.1: Expose Chat Orchestrator via REST API
+
+**User Story:** As a frontend interface, I want a dedicated REST API endpoint that accepts user prompts and returns the Copilot's generated response, so that I can communicate with the backend orchestrator over HTTP.
+**Business Value:** Bridges the gap between the CLI implementation and a web-based interface, enabling the UI to consume the chatbot's capabilities asynchronously.
+
+**Acceptance Criteria — Given/When/Then:**
+
+* **Scenario 1: Successful Chat Request**
+* **Given** the FastAPI server is running with live database clients initialized
+* **When** a POST request is sent to `/api/v1/chat` with a valid prompt
+* **Then** the endpoint invokes `run_chat_cycle` and returns the Markdown response string with a `200 OK` status.
+
+
+* **Scenario 2: Empty Prompt Handling**
+* **Given** the `/api/v1/chat` endpoint
+* **When** a POST request is sent with an empty or whitespace-only prompt
+* **Then** it immediately returns a `400 Bad Request` without invoking the LLM.
+
+**TDD Test Scenarios:**
+
+* *Test:* `test_api_chat_endpoint_success` -> Mock `run_chat_cycle` to return a Markdown string; assert the endpoint returns 200 and the correct payload.
+* *Test:* `test_api_chat_endpoint_empty` -> Assert sending an empty prompt yields a 400 status.
+
+**Dependencies:** Epic 3 (`run_chat_cycle`).
+**Definition of Done:**
+
+* `POST /api/v1/chat` is implemented in `backend/main.py`.
+* Database clients (`Neo4jKGClient`) are instantiated securely at application startup (using FastAPI lifespan/dependency injection).
+* TDD tests pass.
+
+#### US-4.2: Build Minimal Web Chat Interface
+
+**User Story:** As a developer, I want a simple, browser-based chat interface hosted by the backend, so that I can interact with the Copilot without using the terminal.
+**Business Value:** Fulfills the MVP product vision by providing a standard, accessible interface for querying the codebase with visual loading states.
+
+**Acceptance Criteria — Given/When/Then:**
+
+* **Scenario 1: Static File Serving**
+* **Given** the FastAPI server is running
+* **When** I navigate to `http://localhost:8000/` in a browser
+* **Then** the server returns an `index.html` file containing the chat interface.
+
+* **Scenario 2: Message Exchange and Loading State**
+* **Given** the web interface is open
+* **When** I submit a question
+* **Then** my message appears in the chat window, a visual "loading..." indicator appears, and the loading indicator is replaced by the Copilot's response once the API call completes.
+
+* **Scenario 3: Conversation History**
+* **Given** an active session in the browser
+* **When** multiple messages are sent
+* **Then** the UI maintains a visual history of the current session's Q&A in a scrolling view.
+
+**TDD Test Scenarios:**
+
+* *Test:* `test_static_index_served` -> Assert GET `/` returns a 200 status and HTML content.
+
+**Dependencies:** US-4.1 (Chat Endpoint).
+**Definition of Done:**
+
+* Vanilla HTML/JS/CSS files are added to a `frontend/` or `static/` directory.
+* FastAPI is configured to serve static files.
+* UI correctly handles asynchronous API calls (fetch) and displays errors if the backend fails.
+
+#### US-4.3: Render Markdown and Evidence Display
+
+**User Story:** As a developer, I want the web interface to parse the Copilot's raw Markdown response into structured HTML, so that I can easily read the engineering answers and distinctly see the cited evidence.
+**Business Value:** Ensures the strict formatting rules enforced in Epic 3 are actually legible and useful to the end-user.
+
+**Acceptance Criteria — Given/When/Then:**
+
+* **Scenario 1: Markdown Rendering**
+* **Given** the UI receives a response containing Markdown (`###`, `**`, `-`)
+* **When** it renders the message to the DOM
+* **Then** the Markdown is converted to proper HTML elements (headers, bold text, bulleted lists).
+
+* **Scenario 2: Evidence Distinction**
+* **Given** the UI receives a response containing the `### Evidence` section
+* **When** it renders the message
+* **Then** the Evidence section is visually distinct (e.g., slightly different background color, border, or smaller text) from the main `### Answer`.
+
+**TDD Test Scenarios:**
+
+* *Note:* As this is a vanilla JS UI without a heavy frontend framework, testing will be primarily manual visual validation in the browser, though basic structural tests can be written if a DOM parser is available in the test suite.
+
+**Dependencies:** US-4.2 (Base UI).
+**Definition of Done:**
+
+* A lightweight Markdown parser (e.g., `marked.js` via CDN) is integrated into the frontend.
+* Custom CSS is applied to highlight the Evidence and Confidence sections.
 
 ---
 
