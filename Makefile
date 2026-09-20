@@ -19,7 +19,7 @@ check: typecheck test
 
 # Run the interactive CLI chat script
 chat:
-	uv run python scripts/verify_chat.py
+	uv run python -m scripts.verify_chat
 
 # Run the local REST API server
 run:

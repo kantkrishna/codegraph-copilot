@@ -7,7 +7,6 @@ from typing import Dict, Any, Optional, List
 from backend.kgtools.tools import get_relationships
 from backend.kgtools.client import KGClient
 
-
 class MockKGClientForGetRelationships:
     def search_entity(self, name: str) -> Optional[Dict[str, Any]]:
         return None
@@ -22,7 +21,6 @@ class MockKGClientForGetRelationships:
                 return [{"source_id": "ent_789", "edge_type": "DEPENDS_ON"}]
         return []
 
-
 def test_get_relationships_outbound_success() -> None:
     """Test US-2.2 Scenario 1: Valid retrieval (Outbound)."""
     client: KGClient = MockKGClientForGetRelationships()
@@ -31,7 +29,6 @@ def test_get_relationships_outbound_success() -> None:
     assert len(result) == 1
     assert result[0]["target_id"] == "ent_456"
     assert result[0]["edge_type"] == "CALLS"
-
 
 def test_get_relationships_inbound_success() -> None:
     """Test US-2.2 Scenario 1: Valid retrieval (Inbound)."""
@@ -42,7 +39,6 @@ def test_get_relationships_inbound_success() -> None:
     assert result[0]["source_id"] == "ent_789"
     assert result[0]["edge_type"] == "DEPENDS_ON"
 
-
 def test_get_relationships_empty_result() -> None:
     """Test US-2.2 Scenario 2: No relationships found."""
     client: KGClient = MockKGClientForGetRelationships()
@@ -50,7 +46,6 @@ def test_get_relationships_empty_result() -> None:
 
     assert isinstance(result, list)
     assert len(result) == 0
-
 
 def test_get_relationships_invalid_entity() -> None:
     """Test US-2.2 Edge Case: Null or malformed entity ID returns validation error."""
@@ -61,3 +56,10 @@ def test_get_relationships_invalid_entity() -> None:
 
     with pytest.raises(ValueError, match="Invalid entity ID"):
         get_relationships(None, "outbound", client)  # type: ignore[arg-type]
+
+def test_get_relationships_invalid_direction() -> None:
+    """Test US-2.2 Edge Case: Invalid direction throws ValueError."""
+    client: KGClient = MockKGClientForGetRelationships()
+
+    with pytest.raises(ValueError, match="Direction must be one of"):
+        get_relationships("ent_123", "diagonal", client)

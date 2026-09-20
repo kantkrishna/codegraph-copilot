@@ -3,7 +3,7 @@
 # This file implements the deterministic Knowledge Graph tools for LLM consumption.
 
 from typing import Dict, Any, List, Optional
-from backend.kgtools.client import KGClient, KGTimeoutError
+from backend.kgtools.client import KGClient, RAGClient, KGTimeoutError
 
 
 def find_entity(name: str, client: KGClient) -> Dict[str, Any]:
@@ -34,10 +34,7 @@ def find_entity(name: str, client: KGClient) -> Dict[str, Any]:
 
 
 def get_relationships(
-    entity_id: str,
-    direction: str,
-    client: KGClient,
-    relationship_type: Optional[str] = None,
+    entity_id: str, direction: str, client: KGClient, relationship_type: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """
     Retrieve the surrounding relationships for a verified entity.
@@ -56,11 +53,11 @@ def get_relationships(
     """
     if not entity_id or not isinstance(entity_id, str):
         raise ValueError("Invalid entity ID provided.")
-
+    
     valid_directions: List[str] = ["inbound", "outbound", "both"]
+    
     if direction not in valid_directions:
         raise ValueError(f"Direction must be one of {valid_directions}.")
-
     return client.fetch_relationships(entity_id, direction, relationship_type)
 
 
@@ -90,3 +87,22 @@ def find_dependents(entity_id: str, client: KGClient) -> List[Dict[str, Any]]:
         A list of upstream components impacted by this entity.
     """
     return get_relationships(entity_id, "inbound", client)
+
+def hybrid_search(
+    query: str, client: RAGClient, top_k: int = 5, filters: Optional[Dict[str, Any]] = None
+) -> List[Dict[str, Any]]:
+    """
+    Search the existing CodeGraph AI vector database and document indices.
+    
+    Args:
+        query: Natural language query to search for.
+        client: The injected RAG client.
+        top_k: Number of context chunks to return.
+        filters: Optional metadata filters.
+        
+    Returns:
+        List of document chunks and their source file paths.
+    """
+    if not query.strip():
+        return []
+    return client.search_documents(query, top_k, filters)

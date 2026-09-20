@@ -65,4 +65,20 @@ KG_TOOLS: List[ChatCompletionToolParam] = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "hybrid_search",
+            "description": "Search source code and documentation using the Hybrid RAG implementation. Use this for explanatory, 'how', or 'why' queries.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Natural language search query."},
+                    "top_k": {"type": "integer", "description": "Number of chunks to return."},
+                    "filters": {"type": "object", "description": "Optional metadata filters", "nullable": True}
+                },
+                "required": ["query"],
+            },
+        },
+    },
 ]

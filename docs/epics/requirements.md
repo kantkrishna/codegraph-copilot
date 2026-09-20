@@ -12,6 +12,9 @@
   * [US-2.3: Trace Entity Dependencies for Impact Analysis](#us-23-trace-entity-dependencies-for-impact-analysis)
   * [US-2.4: Validate LLM Function Calling with KG Tools](#us-24-validate-llm-function-calling-with-kg-tools)
 * [Epic 3: Hybrid RAG Integration & Context Orchestration](#epic-3-hybrid-rag-integration--context-orchestration)
+  * [US-3.1: Implement Hybrid Search Tool](#us-31-implement-hybrid-search-tool)
+  * [US-3.2: Context Orchestration (Multi-Tool Routing)](#us-32-context-orchestration-multi-tool-routing)]
+  * [US-3.3: Enforce Grounded Response Formatting & Evidence Citation](#us-33-enforce-grounded-response-formatting--evidence-citation)
 * [Epic 4: Minimal Viable User Interface](#epic-4-minimal-viable-user-interface)
 * [Epic 5: MVP Evaluation and Handoff](#epic-5-mvp-evaluation-and-handoff)
 
@@ -305,6 +308,125 @@ Here is the smallest logical set of user stories to deliver Epic 2 end-to-end.
 * Implementation of the `hybrid_search(query, filters)` tool leveraging the existing Codegraph AI Vector DB.
 * Context Orchestrator that allows the LLM to choose between KG retrieval, Hybrid RAG, or both.
 * Prompt engineering to ensure responses strictly follow the "Grounded Answer" format (Answer, Flow, Evidence, Confidence) without exposing chain-of-thought.
+
+### Analysis of Epic 3 Scope
+
+Epic 3 focuses on integrating the existing document retrieval capabilities and orchestrating the chatbot's decision-making process. Based on the master prompt, the existing vector database and document retrieval mechanisms are already implemented within Codegraph AI. The goal here is not to build a RAG system from scratch, but to expose the existing Codegraph AI Hybrid RAG implementation to the LLM via a dedicated tool, allow the LLM to choose between Knowledge Graph (KG) and RAG tools, and strictly format the final output.
+
+**Assumptions & Clarifications:**
+
+* **Assumption:** The existing Codegraph AI system exposes a callable API or internal service for Hybrid RAG searches that accepts a query string and optional filters.
+* **Assumption:** "Context Orchestrator" in this MVP refers to the LLM's native function-calling reasoning loop (Agentic loop) governed by system prompts, rather than a heavy orchestration framework like LangChain.
+* **Clarification:** If a query requires both KG and RAG, the LLM will issue tool calls sequentially or in parallel depending on the chosen LLM provider's capabilities. The tests will assume sequential capability as a baseline.
+
+Here is the minimal logical set of user stories to deliver Epic 3.
+
+
+### US-3.1: Implement Hybrid Search Tool
+
+**User Story:** As a chatbot orchestrator, I want a tool to execute a natural language search against the existing Codegraph AI vector database and document indices, so that the LLM can retrieve source code snippets and unstructured documentation.
+**Business Value:** Unlocks the ability to answer "how" and "why" questions (e.g., "Explain the flow...") that cannot be answered purely by the structural nodes in the Knowledge Graph.
+
+**Acceptance Criteria — Given/When/Then:**
+
+* **Scenario 1: Relevant Documents Found**
+* **Given** a valid natural language query
+* **When** the `hybrid_search(query)` tool is invoked
+* **Then** it queries the existing Codegraph AI system and returns a list of relevant text snippets, document titles, and source file paths.
+
+* **Scenario 2: No Documents Found**
+* **Given** a query that does not match any indexed documentation or code
+* **When** the `hybrid_search(query)` tool is invoked
+* **Then** it returns an empty list `[]` to indicate no semantic matches were found.
+
+**TDD Test Scenarios:**
+
+* *Test:* `test_hybrid_search_success` -> Mock the Codegraph AI API response to return 2 sample document chunks; assert the tool parses and returns them as a structured dictionary.
+* *Test:* `test_hybrid_search_empty` -> Mock a 404 or empty response from Codegraph AI; assert the tool returns an empty list.
+* *Test:* `test_hybrid_search_handles_filters` -> (If filters are supported) Assert that passing an optional file-type filter correctly formats the downstream API request.
+
+**Dependencies:** US-1.1 (API contracts).
+**Definition of Done:**
+
+* `hybrid_search` Python function is implemented.
+* Function includes detailed LLM-facing docstrings explaining when to use this tool versus KG tools.
+* TDD test cases pass using mocked backend responses.
+**Priority:** 1 (Highest).
+
+
+### US-3.2: Context Orchestration (Multi-Tool Routing)
+
+**User Story:** As a user, I want the chatbot to automatically determine whether my question requires looking up Knowledge Graph relationships, searching documentation, or both, so that I receive comprehensive answers without having to specify how the bot retrieves data.
+**Business Value:** Creates the core "intelligence" of the chatbot, allowing it to seamlessly blend structural graph data with unstructured semantic data.
+
+**Acceptance Criteria — Given/When/Then:**
+
+* **Scenario 1: Structural Query (KG Preference)**
+* **Given** a structural query (e.g., "What depends on PaymentService?")
+* **When** the LLM processes the query
+* **Then** it autonomously selects and executes the KG tools (e.g., `find_entity` and `find_dependents`) without invoking `hybrid_search`.
+
+* **Scenario 2: Explanatory Query (RAG Preference)**
+* **Given** an explanatory query (e.g., "Explain how the password hashing works")
+* **When** the LLM processes the query
+* **Then** it autonomously selects and executes the `hybrid_search` tool.
+
+* **Scenario 3: Hybrid Query (Both)**
+* **Given** a complex query (e.g., "What classes call OrderService and how is the order validated?")
+* **When** the LLM processes the query
+* **Then** it executes both KG tools (to find callers) and the RAG tool (to find validation logic).
+
+**TDD Test Scenarios:**
+
+* *Test:* `test_orchestrator_routes_to_kg` -> Provide a mocked prompt simulating a dependency question; assert the routing logic triggers a KG tool call.
+* *Test:* `test_orchestrator_routes_to_rag` -> Provide a mocked prompt simulating a "how-to" question; assert the routing logic triggers a `hybrid_search` tool call.
+* *Test:* `test_orchestrator_handles_parallel_or_sequential_calls` -> Assert that the orchestrator loop can handle an LLM response requesting multiple different tools before generating the final answer.
+
+**Dependencies:** US-2.4 (LLM Tool Binding), US-3.1 (`hybrid_search` tool).
+**Definition of Done:**
+
+* System prompt is updated with instructions on tool selection criteria.
+* Orchestration loop supports handling multiple sequential or parallel tool calls.
+* All TDD tests pass using mocked LLM responses.
+**Priority:** 2 (High).
+
+
+### US-3.3: Enforce Grounded Response Formatting & Evidence Citation
+
+**User Story:** As a developer, I want the chatbot's final response to strictly follow a structured format containing Answer, Flow, Evidence, and Confidence, and explicitly cite its sources, so that I can independently verify the bot's claims without seeing messy chain-of-thought logs.
+**Business Value:** Ensures trust and transparency. Developers need to know exactly which files or graph relationships informed the answer, and they need to know when the bot lacks information.
+
+**Acceptance Criteria — Given/When/Then:**
+
+* **Scenario 1: Fully Grounded Answer**
+* **Given** the LLM has successfully retrieved context from tools
+* **When** it generates the final response
+* **Then** the response must be formatted with Markdown headers for "Answer", "Flow" (if applicable), "Evidence" (categorized into Knowledge Graph and Source), and "Confidence".
+
+* **Scenario 2: Insufficient Evidence Handling**
+* **Given** the tools returned empty results for the user's query
+* **When** the LLM generates the final response
+* **Then** it must explicitly state "I could not establish this from the indexed code and documentation" instead of hallucinating an answer.
+
+* **Scenario 3: Chain-of-Thought Suppression**
+* **Given** the LLM generates the final response
+* **When** the response is returned to the client
+* **Then** no `<thought>` blocks, internal reasoning steps, or raw JSON tool outputs are visible in the final text.
+
+**TDD Test Scenarios:**
+
+* *Test:* `test_response_contains_required_sections` -> Mock an LLM text output; assert it contains the required substring headers (`Answer`, `Evidence`, `Confidence`).
+* *Test:* `test_response_handles_missing_evidence` -> Mock empty tool results; assert the orchestrator yields the exact fallback string ("I could not establish this...").
+* *Test:* `test_response_filters_cot` -> Mock an LLM response containing `<thought>...</thought>` blocks; assert the final returned string strips these tags and their contents.
+
+**Dependencies:** US-3.2 (Orchestration).
+**Definition of Done:**
+
+* System prompt explicitly dictates the "Grounded Response Format".
+* Post-processing logic is implemented to strip internal reasoning tags if the LLM provider uses them.
+* Evidence categorization (KG vs. RAG source) is successfully demonstrated in the test output.
+* TDD tests pass.
+**Priority:** 3 (High — Completes Epic 3).
 
 ---
 

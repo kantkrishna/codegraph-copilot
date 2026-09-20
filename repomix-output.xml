@@ -1,0 +1,2305 @@
+This file is a merged representation of the entire codebase, combined into a single document by Repomix.
+
+<file_summary>
+This section contains a summary of this file.
+
+<purpose>
+This file contains a packed representation of the entire repository's contents.
+It is designed to be easily consumable by AI systems for analysis, code review,
+or other automated processes.
+</purpose>
+
+<file_format>
+The content is organized as follows:
+1. This summary section
+2. Repository information
+3. Directory structure
+4. Repository files (if enabled)
+5. Multiple file entries, each consisting of:
+  - File path as an attribute
+  - Full contents of the file
+</file_format>
+
+<usage_guidelines>
+- This file should be treated as read-only. Any changes should be made to the
+  original repository files, not this packed version.
+- When processing this file, use the file path to distinguish
+  between different files in the repository.
+- Be aware that this file may contain sensitive information. Handle it with
+  the same level of security as you would the original repository.
+</usage_guidelines>
+
+<notes>
+- Some files may have been excluded based on .gitignore rules and Repomix's configuration
+- Binary files are not included in this packed representation. Please refer to the Repository Structure section for a complete list of file paths, including binary files
+- Files matching patterns in .gitignore are excluded
+- Files matching default ignore patterns are excluded
+- Files are sorted by Git change count (files with more changes are at the bottom)
+</notes>
+
+</file_summary>
+
+<directory_structure>
+backend/
+  kgtools/
+    __init__.py
+    client.py
+    neo4j_client.py
+    tool_schemas.py
+    tools.py
+  __init__.py
+  config.py
+  contracts.py
+  llm.py
+  main.py
+  orchestrator.py
+docs/
+  epics/
+    requirements.md
+  architecture_inspection.md
+scripts/
+  verify_chat.py
+tests/
+  integration/
+    test_chat_functional.py
+  unit/
+    foundation/
+      __init__.py
+      test_contracts.py
+      test_llm_endpoint.py
+      test_llm.py
+      test_main.py
+    kgtools/
+      __init__.py
+      test_dependencies.py
+      test_find_entity.py
+      test_get_relationships.py
+      test_llm_tools.py
+  __init__.py
+  kgtools
+.gitignore
+.repomixignore
+LICENSE
+Makefile
+pyproject.toml
+README.md
+</directory_structure>
+
+<files>
+This section contains the contents of the repository's files.
+
+<file path=".repomixignore">
+# Add patterns to ignore here, one per line
+# Example:
+# *.log
+# tmp/
+</file>
+
+<file path="backend/kgtools/__init__.py">
+
+</file>
+
+<file path="backend/kgtools/neo4j_client.py">
+# backend/kgtools/neo4j_client.py
+
+from typing import Dict, Any, List, Optional
+from neo4j import GraphDatabase
+from backend.config import settings
+
+class Neo4jKGClient:
+    """
+    Concrete implementation of KGClient that queries the Neo4j database
+    populated by CodeGraph AI's ingestion pipeline.
+    """
+    def __init__(self) -> None:
+        self.driver = GraphDatabase.driver(
+            settings.neo4j_uri, 
+            auth=(settings.neo4j_user, settings.neo4j_password)
+        )
+
+    def close(self) -> None:
+        """Closes the Neo4j driver connection."""
+        self.driver.close()
+
+    def search_entity(self, name: str) -> Optional[Dict[str, Any]]:
+        clean_name = name.lower().replace(" service", "").replace(" component", "").replace(" stub", "").strip()
+        
+        query = """
+        MATCH (e)
+        WHERE toLower(coalesce(e.name, '')) CONTAINS $name
+        WITH e, labels(e) AS lbls, toLower(coalesce(e.name, '')) AS lower_name
+        WITH e, lbls, lower_name,
+             CASE WHEN lower_name = $name THEN 1000 ELSE 0 END AS exact_score,
+             CASE 
+                WHEN 'Service' IN lbls OR 'App' IN lbls THEN 500
+                WHEN 'File' IN lbls OR 'Document' IN lbls OR 'markdown' IN lbls THEN -10000
+                ELSE 0 
+             END AS type_score
+        // Extreme penalty ensures Document nodes never outscore architectural nodes
+        ORDER BY (exact_score + type_score) DESC, size(lower_name) ASC
+        RETURN e AS entity, lbls AS labels
+        LIMIT 1
+        """
+        with self.driver.session() as session:
+            result = session.run(query, name=clean_name)
+            record = result.single()
+            if record and record["entity"]:
+                node = record["entity"]
+                return {
+                    "id": str(node.element_id),
+                    "type": record["labels"][0] if record["labels"] else "Entity",
+                    "name": node.get("name", name)
+                }
+        return None
+
+    def fetch_relationships(
+        self, 
+        entity_id: str, 
+        direction: str, 
+        relationship_type: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Retrieves relationships using the exact elementId or coalesce(name) for safety.
+        """
+        results: List[Dict[str, Any]] = []
+        with self.driver.session() as session:
+            if direction in ("outbound", "both"):
+                out_query = """
+                MATCH (e)-[r]->(target)
+                WHERE elementId(e) = $entity_id OR coalesce(e.name, '') = $entity_id
+                RETURN target, type(r) as edge_type
+                """
+                for rec in session.run(out_query, entity_id=entity_id):
+                    target = rec["target"]
+                    results.append({
+                        "target_id": str(target.element_id),
+                        "target_name": target.get("name", "Unknown"),
+                        "edge_type": rec["edge_type"]
+                    })
+                    
+            if direction in ("inbound", "both"):
+                in_query = """
+                MATCH (source)-[r]->(e)
+                WHERE elementId(e) = $entity_id OR coalesce(e.name, '') = $entity_id
+                RETURN source, type(r) as edge_type
+                """
+                for rec in session.run(in_query, entity_id=entity_id):
+                    source = rec["source"]
+                    results.append({
+                        "source_id": str(source.element_id),
+                        "source_name": source.get("name", "Unknown"),
+                        "edge_type": rec["edge_type"]
+                    })
+                    
+        return results
+</file>
+
+<file path="backend/__init__.py">
+
+</file>
+
+<file path="docs/architecture_inspection.md">
+# docs/architecture_inspection.md
+
+# Architecture Inspection & Chatbot Boundaries
+**Project:** CodeGraph AI Engineering Copilot MVP  
+**Epic:** 1 / **Story:** US-1.1
+
+## 1. Existing System State (Phases 1 & 2)
+The existing CodeGraph AI platform successfully operates two core retrieval layers:
+*   **Knowledge Graph (KG):** Contains verified facts modeled as nodes (`Class`, `Service`, `Function`, `Module`, `API`, etc.) and edges (`CALLS`, `DEPENDS_ON`, `IMPLEMENTS`). Graph databases typical to this pattern (e.g., Neo4j/NetworkX) are accessible via internal query structures.
+*   **Hybrid RAG Index:** A vector database (e.g., Chroma/pgvector) containing chunked embeddings of source code files, READMEs, and technical documentation, queryable via BM25 + Vector similarity.
+
+## 2. API Contract Boundaries
+To avoid tightly coupling our 7-day Copilot MVP to internal CodeGraph dependencies (which violates the one-week scope constraint), we will interact with the core engine exclusively through standard REST/Function patterns via Pydantic `BaseModel` schemas.
+
+### Designed Tool Interfaces:
+*   **`find_entity`**: Resolves ambiguous LLM queries to explicit Graph Nodes.
+*   **`get_relationships`**: Navigates 1-hop architecture patterns (inbound/outbound).
+*   **`find_dependencies` / `find_dependents`**: Executes localized impact analysis. 
+*   **`hybrid_search`**: Fetches unstructured context for "how" and "why" questions.
+
+## 3. Recommended Implementation Strategy
+*   **Decoupling:** The chatbot orchestrator (FastAPI) will not import CodeGraph's DB clients directly. It will instantiate lightweight service adapters that satisfy the Pydantic contracts.
+*   **Orchestration Logic:** The LLM uses tool calling (function calling) restricted exclusively to the 5 tools above.
+*   **Prompting Boundary:** Hidden system prompts will format all final user output according to the strict `GroundedAnswerResponse` contract (Answer, Flow, Evidence, Confidence) established in `backend/contracts.py`.
+</file>
+
+<file path="tests/integration/test_chat_functional.py">
+# tests/integration/test_chat_functional.py
+
+# This file contains functional/integration tests for the KG tool orchestrator cycle.
+# LLM network calls are mocked to ensure deterministic, flake-free CI/CD builds.
+
+import pytest
+from typing import Dict, Any, List, Optional
+from unittest.mock import MagicMock, patch
+from backend.kgtools.client import KGClient
+from backend.orchestrator import run_chat_cycle
+
+
+class FunctionalMockKGClient:
+    """In-memory KG client mimicking real CodeGraph node and edge schemas."""
+
+    def __init__(self) -> None:
+        self.entities = {
+            "PaymentService": {
+                "id": "svc_payment",
+                "type": "Service",
+                "name": "PaymentService",
+            },
+            "OrderService": {
+                "id": "svc_order",
+                "type": "Service",
+                "name": "OrderService",
+            },
+            "Database": {
+                "id": "infra_db",
+                "type": "Infrastructure",
+                "name": "PostgresDatabase",
+            },
+        }
+        self.edges = [
+            {"source_id": "svc_order", "target_id": "svc_payment", "edge_type": "CALLS"},
+            {"source_id": "svc_payment", "target_id": "infra_db", "edge_type": "DEPENDS_ON"},
+        ]
+
+    def search_entity(self, name: str) -> Optional[Dict[str, Any]]:
+        return self.entities.get(name)
+
+    def fetch_relationships(
+        self,
+        entity_id: str,
+        direction: str,
+        relationship_type: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        results = []
+        for edge in self.edges:
+            if direction in ("outbound", "both") and edge["source_id"] == entity_id:
+                results.append(edge)
+            elif direction in ("inbound", "both") and edge["target_id"] == entity_id:
+                results.append(edge)
+        return results
+
+
+@patch("backend.orchestrator.client.chat.completions.create")
+@pytest.mark.functional
+def test_functional_dependency_lookup(mock_create: MagicMock) -> None:
+    """
+    End-to-end run: asks what PaymentService depends on.
+    Validates tool selection -> tool execution -> final textual synthesis.
+    """
+    kg_client: KGClient = FunctionalMockKGClient()
+    
+    # Mock Turn 1: Model requests to find the entity
+    mock_response_1 = MagicMock()
+    mock_response_1.choices = [MagicMock(message=MagicMock(
+        content=None, 
+        tool_calls=[MagicMock(id="call_1", type="function", function=MagicMock(name="find_entity", arguments='{"name": "PaymentService"}'))]
+    ))]
+    
+    # Mock Turn 2: Model uses the correct ID to find dependencies
+    mock_response_2 = MagicMock()
+    mock_response_2.choices = [MagicMock(message=MagicMock(
+        content=None, 
+        tool_calls=[MagicMock(id="call_2", type="function", function=MagicMock(name="find_dependencies", arguments='{"entity_id": "svc_payment"}'))]
+    ))]
+    
+    # Mock Turn 3: Model synthesizes the final answer using the graph facts
+    mock_response_3 = MagicMock()
+    mock_response_3.choices = [MagicMock(message=MagicMock(
+        content="PaymentService depends on PostgresDatabase (infra_db).", 
+        tool_calls=None
+    ))]
+    
+    mock_create.side_effect = [mock_response_1, mock_response_2, mock_response_3]
+    
+    prompt = "Find what components PaymentService depends on."
+    response = run_chat_cycle(prompt, kg_client)
+
+    assert isinstance(response, str)
+    assert len(response) > 0
+    assert any(term in response.lower() for term in ["database", "infra_db", "postgres"])
+
+
+@patch("backend.orchestrator.client.chat.completions.create")
+@pytest.mark.functional
+def test_functional_impact_dependents_lookup(mock_create: MagicMock) -> None:
+    """
+    End-to-end run: asks what depends on PaymentService (upstream caller).
+    Validates find_dependents tool selection and synthesis.
+    """
+    kg_client: KGClient = FunctionalMockKGClient()
+    
+    # Mock Turn 1
+    mock_response_1 = MagicMock()
+    mock_response_1.choices = [MagicMock(message=MagicMock(
+        content=None, 
+        tool_calls=[MagicMock(id="call_1", type="function", function=MagicMock(name="find_entity", arguments='{"name": "PaymentService"}'))]
+    ))]
+    
+    # Mock Turn 2
+    mock_response_2 = MagicMock()
+    mock_response_2.choices = [MagicMock(message=MagicMock(
+        content=None, 
+        tool_calls=[MagicMock(id="call_2", type="function", function=MagicMock(name="find_dependents", arguments='{"entity_id": "svc_payment"}'))]
+    ))]
+    
+    # Mock Turn 3
+    mock_response_3 = MagicMock()
+    mock_response_3.choices = [MagicMock(message=MagicMock(
+        content="OrderService (svc_order) depends on PaymentService.", 
+        tool_calls=None
+    ))]
+    
+    mock_create.side_effect = [mock_response_1, mock_response_2, mock_response_3]
+    
+    prompt = "Identify what services or callers depend on PaymentService."
+    response = run_chat_cycle(prompt, kg_client)
+
+    assert isinstance(response, str)
+    assert any(term in response.lower() for term in ["orderservice", "order", "svc_order"])
+</file>
+
+<file path="tests/unit/foundation/__init__.py">
+
+</file>
+
+<file path="tests/unit/kgtools/__init__.py">
+
+</file>
+
+<file path="tests/unit/kgtools/test_dependencies.py">
+# tests/unit/kgtools/test_dependencies.py
+
+# This file contains the unit tests for the find_dependencies and find_dependents KG tools.
+
+from typing import Dict, Any, List, Optional
+from backend.kgtools.tools import find_dependencies, find_dependents
+from backend.kgtools.client import KGClient
+
+
+class MockKGClientForDependencies:
+    def search_entity(self, name: str) -> Optional[Dict[str, Any]]:
+        return None
+
+    def fetch_relationships(
+        self, entity_id: str, direction: str, relationship_type: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        if entity_id == "ent_123":
+            if direction == "outbound":
+                return [{"target_id": "ent_downstream", "edge_type": "CALLS"}]
+            if direction == "inbound":
+                return [{"source_id": "ent_upstream", "edge_type": "DEPENDS_ON"}]
+        return []
+
+
+def test_find_dependencies_returns_list() -> None:
+    """Test US-2.3 Scenario 1: Find Dependencies (Downstream)."""
+    client: KGClient = MockKGClientForDependencies()
+    result = find_dependencies("ent_123", client)
+
+    assert isinstance(result, list)
+    assert len(result) == 1
+    assert result[0]["target_id"] == "ent_downstream"
+
+
+def test_find_dependents_returns_list() -> None:
+    """Test US-2.3 Scenario 2: Find Dependents (Upstream / Impact)."""
+    client: KGClient = MockKGClientForDependencies()
+    result = find_dependents("ent_123", client)
+
+    assert isinstance(result, list)
+    assert len(result) == 1
+    assert result[0]["source_id"] == "ent_upstream"
+
+
+def test_find_dependencies_none_exist() -> None:
+    """Test US-2.3 Edge Case: None exist returns empty list."""
+    client: KGClient = MockKGClientForDependencies()
+    result = find_dependencies("ent_isolated", client)
+
+    assert isinstance(result, list)
+    assert len(result) == 0
+</file>
+
+<file path="tests/unit/kgtools/test_llm_tools.py">
+# tests/unit/kgtools/test_llm_tools.py
+
+# This file tests the orchestration and LLM tool-calling binding logic.
+
+from unittest.mock import MagicMock, patch
+from backend.orchestrator import run_chat_cycle
+from backend.kgtools.tool_schemas import KG_TOOLS
+
+def test_llm_tool_binding() -> None:
+    """Test US-2.4 Scenario 1 (Part A): Assert tool schemas are correctly formatted."""
+    assert len(KG_TOOLS) == 4
+    tool_names = [tool["function"]["name"] for tool in KG_TOOLS]
+    assert "find_entity" in tool_names
+    assert "get_relationships" in tool_names
+    assert "find_dependencies" in tool_names
+    assert "find_dependents" in tool_names
+
+@patch("backend.orchestrator.client.chat.completions.create")
+def test_llm_invokes_correct_tool(mock_create: MagicMock) -> None:
+    """Test US-2.4 Scenario 1 (Part B): LLM outputs structured tool call request."""
+    mock_function = MagicMock()
+    mock_function.name = "find_entity"
+    mock_function.arguments = '{"name": "PaymentService"}'
+
+    mock_tool_call = MagicMock()
+    mock_tool_call.id = "call_123"
+    mock_tool_call.type = "function"
+    mock_tool_call.function = mock_function
+
+    mock_message = MagicMock()
+    mock_message.content = None
+    mock_message.tool_calls = [mock_tool_call]
+    
+    mock_response = MagicMock()
+    mock_response.choices = [MagicMock(message=mock_message)]
+    
+    mock_final_response = MagicMock()
+    mock_final_response.choices = [MagicMock(message=MagicMock(content="PaymentService found.", tool_calls=None))]
+    
+    mock_create.side_effect = [mock_response, mock_final_response]
+    
+    mock_kg_client = MagicMock()
+    mock_kg_client.search_entity.return_value = {"id": "ent_1", "name": "PaymentService"}
+
+    final_answer = run_chat_cycle("Find PaymentService", mock_kg_client)
+    
+    assert "PaymentService found." in final_answer
+    mock_kg_client.search_entity.assert_called_once_with("PaymentService")
+
+@patch("backend.orchestrator.client.chat.completions.create")
+def test_orchestrator_returns_tool_data_to_llm(mock_create: MagicMock) -> None:
+    """Test US-2.4 Scenario 2: Handling Tool Responses and passing them back."""
+    mock_function = MagicMock()
+    mock_function.name = "find_dependencies"
+    mock_function.arguments = '{"entity_id": "ent_1"}'
+
+    mock_tool_call = MagicMock()
+    mock_tool_call.id = "call_99"
+    mock_tool_call.type = "function"
+    mock_tool_call.function = mock_function
+
+    mock_message = MagicMock()
+    mock_message.content = None
+    mock_message.tool_calls = [mock_tool_call]
+
+    mock_response_1 = MagicMock()
+    mock_response_1.choices = [MagicMock(message=mock_message)]
+    
+    mock_response_2 = MagicMock()
+    mock_response_2.choices = [MagicMock(message=MagicMock(content="It depends on Database.", tool_calls=None))]
+    
+    mock_create.side_effect = [mock_response_1, mock_response_2]
+    
+    mock_kg_client = MagicMock()
+    mock_kg_client.fetch_relationships.return_value = [{"target_id": "ent_db"}]
+
+    run_chat_cycle("What does it depend on?", mock_kg_client)
+
+    second_call_args = mock_create.call_args_list[1][1]
+    messages = second_call_args["messages"]
+    
+    assert messages[-1]["role"] == "tool"
+    assert messages[-1]["tool_call_id"] == "call_99"
+    assert "ent_db" in messages[-1]["content"]
+</file>
+
+<file path="tests/__init__.py">
+
+</file>
+
+<file path="tests/kgtools">
+
+</file>
+
+<file path=".gitignore">
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[codz]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# PyInstaller
+#   Usually these files are written by a python script from a template
+#   before PyInstaller builds the exe, so as to inject date/other infos into it.
+*.manifest
+*.spec
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py.cover
+.hypothesis/
+.pytest_cache/
+cover/
+
+# Translations
+*.mo
+*.pot
+
+# Django stuff:
+*.log
+local_settings.py
+db.sqlite3
+db.sqlite3-journal
+
+# Flask stuff:
+instance/
+.webassets-cache
+
+# Scrapy stuff:
+.scrapy
+
+# Sphinx documentation
+docs/_build/
+
+# PyBuilder
+.pybuilder/
+target/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# IPython
+profile_default/
+ipython_config.py
+
+# pyenv
+#   For a library or package, you might want to ignore these files since the code is
+#   intended to run in multiple environments; otherwise, check them in:
+# .python-version
+
+# pipenv
+#   According to pypa/pipenv#598, it is recommended to include Pipfile.lock in version control.
+#   However, in case of collaboration, if having platform-specific dependencies or dependencies
+#   having no cross-platform support, pipenv may install dependencies that don't work, or not
+#   install all needed dependencies.
+# Pipfile.lock
+
+# UV
+#   Similar to Pipfile.lock, it is generally recommended to include uv.lock in version control.
+#   This is especially recommended for binary packages to ensure reproducibility, and is more
+#   commonly ignored for libraries.
+# uv.lock
+
+# poetry
+#   Similar to Pipfile.lock, it is generally recommended to include poetry.lock in version control.
+#   This is especially recommended for binary packages to ensure reproducibility, and is more
+#   commonly ignored for libraries.
+#   https://python-poetry.org/docs/basic-usage/#commit-your-poetrylock-file-to-version-control
+# poetry.lock
+# poetry.toml
+
+# pdm
+#   Similar to Pipfile.lock, it is generally recommended to include pdm.lock in version control.
+#   pdm recommends including project-wide configuration in pdm.toml, but excluding .pdm-python.
+#   https://pdm-project.org/en/latest/usage/project/#working-with-version-control
+# pdm.lock
+# pdm.toml
+.pdm-python
+.pdm-build/
+
+# pixi
+#   Similar to Pipfile.lock, it is generally recommended to include pixi.lock in version control.
+# pixi.lock
+#   Pixi creates a virtual environment in the .pixi directory, just like venv module creates one
+#   in the .venv directory. It is recommended not to include this directory in version control.
+.pixi
+
+# PEP 582; used by e.g. github.com/David-OConnor/pyflow and github.com/pdm-project/pdm
+__pypackages__/
+
+# Celery stuff
+celerybeat-schedule
+celerybeat.pid
+
+# Redis
+*.rdb
+*.aof
+*.pid
+
+# RabbitMQ
+mnesia/
+rabbitmq/
+rabbitmq-data/
+
+# ActiveMQ
+activemq-data/
+
+# SageMath parsed files
+*.sage.py
+
+# Environments
+.env
+.envrc
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Spyder project settings
+.spyderproject
+.spyproject
+
+# Rope project settings
+.ropeproject
+
+# mkdocs documentation
+/site
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Pyre type checker
+.pyre/
+
+# pytype static type analyzer
+.pytype/
+
+# Cython debug symbols
+cython_debug/
+
+# PyCharm
+#   JetBrains specific template is maintained in a separate JetBrains.gitignore that can
+#   be found at https://github.com/github/gitignore/blob/main/Global/JetBrains.gitignore
+#   and can be added to the global gitignore or merged into this file.  For a more nuclear
+#   option (not recommended) you can uncomment the following to ignore the entire idea folder.
+# .idea/
+
+# Abstra
+#   Abstra is an AI-powered process automation framework.
+#   Ignore directories containing user credentials, local state, and settings.
+#   Learn more at https://abstra.io/docs
+.abstra/
+
+# Visual Studio Code
+#   Visual Studio Code specific template is maintained in a separate VisualStudioCode.gitignore 
+#   that can be found at https://github.com/github/gitignore/blob/main/Global/VisualStudioCode.gitignore
+#   and can be added to the global gitignore or merged into this file. However, if you prefer, 
+#   you could uncomment the following to ignore the entire vscode folder
+# .vscode/
+# Temporary file for partial code execution
+tempCodeRunnerFile.py
+
+# Ruff stuff:
+.ruff_cache/
+
+# PyPI configuration file
+.pypirc
+
+# Marimo
+marimo/_static/
+marimo/_lsp/
+__marimo__/
+
+# Streamlit
+.streamlit/secrets.toml
+</file>
+
+<file path="LICENSE">
+Apache License
+                           Version 2.0, January 2004
+                        http://www.apache.org/licenses/
+
+   TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION
+
+   1. Definitions.
+
+      "License" shall mean the terms and conditions for use, reproduction,
+      and distribution as defined by Sections 1 through 9 of this document.
+
+      "Licensor" shall mean the copyright owner or entity authorized by
+      the copyright owner that is granting the License.
+
+      "Legal Entity" shall mean the union of the acting entity and all
+      other entities that control, are controlled by, or are under common
+      control with that entity. For the purposes of this definition,
+      "control" means (i) the power, direct or indirect, to cause the
+      direction or management of such entity, whether by contract or
+      otherwise, or (ii) ownership of fifty percent (50%) or more of the
+      outstanding shares, or (iii) beneficial ownership of such entity.
+
+      "You" (or "Your") shall mean an individual or Legal Entity
+      exercising permissions granted by this License.
+
+      "Source" form shall mean the preferred form for making modifications,
+      including but not limited to software source code, documentation
+      source, and configuration files.
+
+      "Object" form shall mean any form resulting from mechanical
+      transformation or translation of a Source form, including but
+      not limited to compiled object code, generated documentation,
+      and conversions to other media types.
+
+      "Work" shall mean the work of authorship, whether in Source or
+      Object form, made available under the License, as indicated by a
+      copyright notice that is included in or attached to the work
+      (an example is provided in the Appendix below).
+
+      "Derivative Works" shall mean any work, whether in Source or Object
+      form, that is based on (or derived from) the Work and for which the
+      editorial revisions, annotations, elaborations, or other modifications
+      represent, as a whole, an original work of authorship. For the purposes
+      of this License, Derivative Works shall not include works that remain
+      separable from, or merely link (or bind by name) to the interfaces of,
+      the Work and Derivative Works thereof.
+
+      "Contribution" shall mean any work of authorship, including
+      the original version of the Work and any modifications or additions
+      to that Work or Derivative Works thereof, that is intentionally
+      submitted to Licensor for inclusion in the Work by the copyright owner
+      or by an individual or Legal Entity authorized to submit on behalf of
+      the copyright owner. For the purposes of this definition, "submitted"
+      means any form of electronic, verbal, or written communication sent
+      to the Licensor or its representatives, including but not limited to
+      communication on electronic mailing lists, source code control systems,
+      and issue tracking systems that are managed by, or on behalf of, the
+      Licensor for the purpose of discussing and improving the Work, but
+      excluding communication that is conspicuously marked or otherwise
+      designated in writing by the copyright owner as "Not a Contribution."
+
+      "Contributor" shall mean Licensor and any individual or Legal Entity
+      on behalf of whom a Contribution has been received by Licensor and
+      subsequently incorporated within the Work.
+
+   2. Grant of Copyright License. Subject to the terms and conditions of
+      this License, each Contributor hereby grants to You a perpetual,
+      worldwide, non-exclusive, no-charge, royalty-free, irrevocable
+      copyright license to reproduce, prepare Derivative Works of,
+      publicly display, publicly perform, sublicense, and distribute the
+      Work and such Derivative Works in Source or Object form.
+
+   3. Grant of Patent License. Subject to the terms and conditions of
+      this License, each Contributor hereby grants to You a perpetual,
+      worldwide, non-exclusive, no-charge, royalty-free, irrevocable
+      (except as stated in this section) patent license to make, have made,
+      use, offer to sell, sell, import, and otherwise transfer the Work,
+      where such license applies only to those patent claims licensable
+      by such Contributor that are necessarily infringed by their
+      Contribution(s) alone or by combination of their Contribution(s)
+      with the Work to which such Contribution(s) was submitted. If You
+      institute patent litigation against any entity (including a
+      cross-claim or counterclaim in a lawsuit) alleging that the Work
+      or a Contribution incorporated within the Work constitutes direct
+      or contributory patent infringement, then any patent licenses
+      granted to You under this License for that Work shall terminate
+      as of the date such litigation is filed.
+
+   4. Redistribution. You may reproduce and distribute copies of the
+      Work or Derivative Works thereof in any medium, with or without
+      modifications, and in Source or Object form, provided that You
+      meet the following conditions:
+
+      (a) You must give any other recipients of the Work or
+          Derivative Works a copy of this License; and
+
+      (b) You must cause any modified files to carry prominent notices
+          stating that You changed the files; and
+
+      (c) You must retain, in the Source form of any Derivative Works
+          that You distribute, all copyright, patent, trademark, and
+          attribution notices from the Source form of the Work,
+          excluding those notices that do not pertain to any part of
+          the Derivative Works; and
+
+      (d) If the Work includes a "NOTICE" text file as part of its
+          distribution, then any Derivative Works that You distribute must
+          include a readable copy of the attribution notices contained
+          within such NOTICE file, excluding those notices that do not
+          pertain to any part of the Derivative Works, in at least one
+          of the following places: within a NOTICE text file distributed
+          as part of the Derivative Works; within the Source form or
+          documentation, if provided along with the Derivative Works; or,
+          within a display generated by the Derivative Works, if and
+          wherever such third-party notices normally appear. The contents
+          of the NOTICE file are for informational purposes only and
+          do not modify the License. You may add Your own attribution
+          notices within Derivative Works that You distribute, alongside
+          or as an addendum to the NOTICE text from the Work, provided
+          that such additional attribution notices cannot be construed
+          as modifying the License.
+
+      You may add Your own copyright statement to Your modifications and
+      may provide additional or different license terms and conditions
+      for use, reproduction, or distribution of Your modifications, or
+      for any such Derivative Works as a whole, provided Your use,
+      reproduction, and distribution of the Work otherwise complies with
+      the conditions stated in this License.
+
+   5. Submission of Contributions. Unless You explicitly state otherwise,
+      any Contribution intentionally submitted for inclusion in the Work
+      by You to the Licensor shall be under the terms and conditions of
+      this License, without any additional terms or conditions.
+      Notwithstanding the above, nothing herein shall supersede or modify
+      the terms of any separate license agreement you may have executed
+      with Licensor regarding such Contributions.
+
+   6. Trademarks. This License does not grant permission to use the trade
+      names, trademarks, service marks, or product names of the Licensor,
+      except as required for reasonable and customary use in describing the
+      origin of the Work and reproducing the content of the NOTICE file.
+
+   7. Disclaimer of Warranty. Unless required by applicable law or
+      agreed to in writing, Licensor provides the Work (and each
+      Contributor provides its Contributions) on an "AS IS" BASIS,
+      WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+      implied, including, without limitation, any warranties or conditions
+      of TITLE, NON-INFRINGEMENT, MERCHANTABILITY, or FITNESS FOR A
+      PARTICULAR PURPOSE. You are solely responsible for determining the
+      appropriateness of using or redistributing the Work and assume any
+      risks associated with Your exercise of permissions under this License.
+
+   8. Limitation of Liability. In no event and under no legal theory,
+      whether in tort (including negligence), contract, or otherwise,
+      unless required by applicable law (such as deliberate and grossly
+      negligent acts) or agreed to in writing, shall any Contributor be
+      liable to You for damages, including any direct, indirect, special,
+      incidental, or consequential damages of any character arising as a
+      result of this License or out of the use or inability to use the
+      Work (including but not limited to damages for loss of goodwill,
+      work stoppage, computer failure or malfunction, or any and all
+      other commercial damages or losses), even if such Contributor
+      has been advised of the possibility of such damages.
+
+   9. Accepting Warranty or Additional Liability. While redistributing
+      the Work or Derivative Works thereof, You may choose to offer,
+      and charge a fee for, acceptance of support, warranty, indemnity,
+      or other liability obligations and/or rights consistent with this
+      License. However, in accepting such obligations, You may act only
+      on Your own behalf and on Your sole responsibility, not on behalf
+      of any other Contributor, and only if You agree to indemnify,
+      defend, and hold each Contributor harmless for any liability
+      incurred by, or claims asserted against, such Contributor by reason
+      of your accepting any such warranty or additional liability.
+
+   END OF TERMS AND CONDITIONS
+
+   APPENDIX: How to apply the Apache License to your work.
+
+      To apply the Apache License to your work, attach the following
+      boilerplate notice, with the fields enclosed by brackets "[]"
+      replaced with your own identifying information. (Don't include
+      the brackets!)  The text should be enclosed in the appropriate
+      comment syntax for the file format. We also recommend that a
+      file or class name and description of purpose be included on the
+      same "printed page" as the copyright notice for easier
+      identification within third-party archives.
+
+   Copyright [yyyy] [name of copyright owner]
+
+   Licensed under the Apache License, Version 2.0 (the "License");
+   you may not use this file except in compliance with the License.
+   You may obtain a copy of the License at
+
+       http://www.apache.org/licenses/LICENSE-2.0
+
+   Unless required by applicable law or agreed to in writing, software
+   distributed under the License is distributed on an "AS IS" BASIS,
+   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+   See the License for the specific language governing permissions and
+   limitations under the License.
+</file>
+
+<file path="Makefile">
+# Makefile
+
+.PHONY: install test typecheck check chat run clean
+
+# Install dependencies using uv
+install:
+	uv sync
+
+# Run all tests with coverage
+test:
+	uv run pytest
+
+# Run strict type checking
+typecheck:
+	uv run mypy .
+
+# Run both type checks and tests
+check: typecheck test
+
+# Run the interactive CLI chat script
+chat:
+	uv run python scripts/verify_chat.py
+
+# Run the local REST API server
+run:
+	uv run uvicorn backend.main:app --reload --host 0.0.0.0 --port 8000
+
+# Clean cache directories
+clean:
+	rm -rf .pytest_cache
+	rm -rf .mypy_cache
+	find . -type d -name "__pycache__" -exec rm -rf {} +
+</file>
+
+<file path="backend/kgtools/client.py">
+# backend/kgtools/client.py
+
+# This file defines the Knowledge Graph Client interface and common exceptions.
+
+from typing import Dict, Any, List, Optional, Protocol
+
+
+class KGTimeoutError(Exception):
+    """Raised when the connection to the Knowledge Graph times out."""
+
+    pass
+
+
+class KGClient(Protocol):
+    """
+    Protocol defining the stable API contract for Knowledge Graph interactions.
+    This ensures the tools remain decoupled from the underlying database implementation.
+    """
+
+    def search_entity(self, name: str) -> Optional[Dict[str, Any]]:
+        """Searches for an entity by exact name."""
+        ...
+
+    def fetch_relationships(
+        self, entity_id: str, direction: str, relationship_type: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """Fetches relationships for a given entity ID."""
+        ...
+</file>
+
+<file path="backend/kgtools/tool_schemas.py">
+# backend/kgtools/tool_schemas.py
+
+# This file defines the OpenAI-compatible tool schemas for the KG tools.
+
+from typing import List
+from openai.types.chat import ChatCompletionToolParam
+
+KG_TOOLS: List[ChatCompletionToolParam] = [
+    {
+        "type": "function",
+        "function": {
+            "name": "find_entity",
+            "description": "Searches the Knowledge Graph for a specific entity. Always use this first to get the entity_id.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "The name of the component (e.g., frontend, PaymentService)"},
+                    "entity_type": {
+                        "type": "string", 
+                        "enum": ["Service", "Class", "Function", "File", "Database", "Unknown"],
+                        "description": "If the user asks for a service, pass 'Service'."
+                    }
+                },
+                "required": ["name"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_relationships",
+            "description": "Retrieves all relationships for an entity. Use this specifically to find source code files belonging to a service by passing direction='inbound'.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "entity_id": {"type": "string"},
+                    "direction": {"type": "string", "enum": ["outbound", "inbound", "both"]},
+                    "relationship_type": {"type": "string", "nullable": True}
+                },
+                "required": ["entity_id", "direction"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "find_dependencies",
+            "description": "Determine what an entity depends on (downstream components).",
+            "parameters": {
+                "type": "object",
+                "properties": {"entity_id": {"type": "string"}},
+                "required": ["entity_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "find_dependents",
+            "description": "Determine what depends on a component (upstream / impact analysis).",
+            "parameters": {
+                "type": "object",
+                "properties": {"entity_id": {"type": "string"}},
+                "required": ["entity_id"],
+            },
+        },
+    },
+]
+</file>
+
+<file path="backend/kgtools/tools.py">
+# backend/kgtools/tools.py
+
+# This file implements the deterministic Knowledge Graph tools for LLM consumption.
+
+from typing import Dict, Any, List, Optional
+from backend.kgtools.client import KGClient, KGTimeoutError
+
+
+def find_entity(name: str, client: KGClient) -> Dict[str, Any]:
+    """
+    Search for a specific entity by name in the Knowledge Graph.
+
+    Args:
+        name: The exact name of the entity (e.g., 'PaymentService').
+        client: The injected Knowledge Graph client.
+
+    Returns:
+        A dictionary containing the entity details (id, type, name),
+        or a graceful error/not-found dictionary if the entity cannot be retrieved.
+    """
+    try:
+        entity: Optional[Dict[str, Any]] = client.search_entity(name)
+        if not entity:
+            return {
+                "status": "not found",
+                "message": f"Entity '{name}' not found in the Knowledge Graph.",
+            }
+        return entity
+    except KGTimeoutError:
+        return {
+            "status": "error",
+            "message": "Knowledge Graph query timed out. Please try again.",
+        }
+
+
+def get_relationships(
+    entity_id: str,
+    direction: str,
+    client: KGClient,
+    relationship_type: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """
+    Retrieve the surrounding relationships for a verified entity.
+
+    Args:
+        entity_id: The unique identifier of the entity.
+        direction: The direction of the relationship ('inbound', 'outbound', or 'both').
+        client: The injected Knowledge Graph client.
+        relationship_type: Optional filter for specific relationship types (e.g., 'CALLS').
+
+    Returns:
+        A list of connected nodes and their edge types. Returns an empty list if none exist.
+
+    Raises:
+        ValueError: If the entity_id or direction is invalid.
+    """
+    if not entity_id or not isinstance(entity_id, str):
+        raise ValueError("Invalid entity ID provided.")
+
+    valid_directions: List[str] = ["inbound", "outbound", "both"]
+    if direction not in valid_directions:
+        raise ValueError(f"Direction must be one of {valid_directions}.")
+
+    return client.fetch_relationships(entity_id, direction, relationship_type)
+
+
+def find_dependencies(entity_id: str, client: KGClient) -> List[Dict[str, Any]]:
+    """
+    Find components that the given entity relies upon (downstream).
+
+    Args:
+        entity_id: The unique identifier of the entity.
+        client: The injected Knowledge Graph client.
+
+    Returns:
+        A list of downstream components.
+    """
+    return get_relationships(entity_id, "outbound", client)
+
+
+def find_dependents(entity_id: str, client: KGClient) -> List[Dict[str, Any]]:
+    """
+    Find components that rely on the given entity (upstream / impact).
+
+    Args:
+        entity_id: The unique identifier of the entity.
+        client: The injected Knowledge Graph client.
+
+    Returns:
+        A list of upstream components impacted by this entity.
+    """
+    return get_relationships(entity_id, "inbound", client)
+</file>
+
+<file path="backend/contracts.py">
+# backend/contracts.py
+
+# This file defines the strict Pydantic v2 API schemas and contracts
+# for the CodeGraph AI Engineering Copilot tools.
+
+from typing import Optional, List, Dict, Any
+from enum import Enum
+from pydantic import BaseModel, Field, ConfigDict
+
+
+class DirectionEnum(str, Enum):
+    INBOUND = "inbound"
+    OUTBOUND = "outbound"
+    BOTH = "both"
+
+
+class ConfidenceEnum(str, Enum):
+    HIGH = "High"
+    MEDIUM = "Medium"
+    LOW = "Low"
+    NONE = "None"
+
+
+class BaseToolRequest(BaseModel):
+    """Base configuration for all tool requests."""
+
+    model_config = ConfigDict(strict=True, extra="forbid")
+
+
+class FindEntityRequest(BaseToolRequest):
+    """Contract for the find_entity tool."""
+
+    name: str = Field(
+        ...,
+        description="The name of the entity to search for (e.g., 'PaymentService').",
+    )
+    entity_type: Optional[str] = Field(
+        None, description="Optional type of the entity (e.g., 'class', 'function')."
+    )
+
+
+class GetRelationshipsRequest(BaseToolRequest):
+    """Contract for the get_relationships tool."""
+
+    entity_name: str = Field(..., description="The name of the target entity.")
+    relationship_type: Optional[str] = Field(
+        None, description="Filter by edge type (e.g., 'CALLS', 'IMPLEMENTS')."
+    )
+    direction: DirectionEnum = Field(
+        default=DirectionEnum.BOTH, description="Traversal direction."
+    )
+
+
+class FindDependenciesRequest(BaseToolRequest):
+    """Contract for the find_dependencies tool (what this component depends on)."""
+
+    entity_name: str = Field(
+        ..., description="The entity name to find dependencies for."
+    )
+    depth: int = Field(default=1, ge=1, le=5, description="Graph traversal depth.")
+
+
+class FindDependentsRequest(BaseToolRequest):
+    """Contract for the find_dependents tool (what depends on this component)."""
+
+    entity_name: str = Field(..., description="The entity name to find dependents for.")
+    depth: int = Field(default=1, ge=1, le=5, description="Graph traversal depth.")
+
+
+class HybridSearchRequest(BaseToolRequest):
+    """Contract for the hybrid_search tool."""
+
+    query: str = Field(..., description="Natural language search query.")
+    top_k: int = Field(
+        default=5, ge=1, le=20, description="Number of context chunks to return."
+    )
+    filters: Optional[Dict[str, Any]] = Field(
+        default=None, description="Metadata filters (e.g., repository or file type)."
+    )
+
+
+class GroundedAnswerResponse(BaseModel):
+    """The structured response contract enforced upon the LLM."""
+
+    model_config = ConfigDict(strict=True)
+
+    answer: str = Field(..., description="The concise engineering answer.")
+    flow: List[str] = Field(
+        default_factory=list,
+        description="Ordered steps representing system flow or architecture.",
+    )
+    evidence: List[str] = Field(
+        ..., description="List of specific sources and Knowledge Graph facts used."
+    )
+    confidence: ConfidenceEnum = Field(
+        ..., description="Confidence level based on available evidence."
+    )
+</file>
+
+<file path="backend/llm.py">
+# backend/llm.py
+
+# This file encapsulates the interaction with the LLM API using an OpenAI-compatible client,
+# supporting local providers like Ollama as configured in environment settings.
+
+import openai
+from backend.config import settings
+
+# Initialize client with configured base_url and api_key
+client = openai.Client(
+    base_url=settings.llm_base_url,
+    api_key=settings.llm_api_key,
+)
+
+
+def call_llm(prompt: str) -> str:
+    """
+    Sends a basic text prompt to the LLM and returns the string response.
+    """
+    response = client.chat.completions.create(
+        model=settings.llm_model,
+        messages=[{"role": "user", "content": prompt}],
+        timeout=30.0,  # Slightly longer timeout for local model spin-up
+    )
+    return response.choices[0].message.content or ""
+</file>
+
+<file path="backend/main.py">
+# backend/main.py
+
+# This file defines the main FastAPI application instance and routing,
+# including the minimal health check and basic LLM test endpoints.
+
+from typing import Dict
+from fastapi import FastAPI, HTTPException, status
+from pydantic import BaseModel, ConfigDict
+import openai
+
+from backend.llm import call_llm
+
+app = FastAPI(
+    title="CodeGraph Engineering Copilot",
+    description="AI-Augmented Engineering Platform Chatbot MVP",
+    version="0.1.0",
+)
+
+
+class LLMTestRequest(BaseModel):
+    """Request contract for the LLM test endpoint."""
+
+    prompt: str
+    model_config = ConfigDict(strict=True)
+
+
+class LLMTestResponse(BaseModel):
+    """Response contract for the LLM test endpoint."""
+
+    response: str
+    model_config = ConfigDict(strict=True)
+
+
+@app.get("/health")
+def health_check() -> Dict[str, str]:
+    """Minimal health check endpoint."""
+    return {"status": "ok"}
+
+
+@app.post("/api/v1/chat/test", response_model=LLMTestResponse)
+def test_llm_integration(request: LLMTestRequest) -> LLMTestResponse:
+    """
+    Basic test endpoint to verify LLM API connectivity and authentication.
+    """
+    if not request.prompt.strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Prompt cannot be empty."
+        )
+
+    try:
+        response_text = call_llm(request.prompt)
+        return LLMTestResponse(response=response_text)
+
+    except openai.AuthenticationError:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Upstream authentication failure: Invalid API Key.",
+        )
+    except openai.APITimeoutError:
+        raise HTTPException(
+            status_code=status.HTTP_504_GATEWAY_TIMEOUT,
+            detail="Upstream timeout failure.",
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"An unexpected error occurred: {str(e)}",
+        )
+</file>
+
+<file path="docs/epics/requirements.md">
+# Codegraph Copilot Epics and User Stories: AI Chatbot for Codegraph
+
+## Table of Contents
+
+* [Epic 1: System Analysis and Foundation](#epic-1-system-analysis-and-foundation)
+  * [US-1.1: Technical Spike — Analyze CodeGraph AI Architecture and Define API Contracts](#us-11-technical-spike--analyze-codegraph-ai-architecture-and-define-api-contracts)
+  * [US-1.2: Initialize Python REST API Backend Skeleton](#us-12-initialize-python-rest-api-backend-skeleton)
+  * [US-1.3: Implement Basic LLM Integration and Test Endpoint](#us-13-implement-basic-llm-integration-and-test-endpoint)
+* [Epic 2: Knowledge Graph Tool Implementation](#epic-2-knowledge-graph-tool-implementation)
+  * [US-2.1: Knowledge Graph Entity Search for Valid Context Retrieval](#us-21-knowledge-graph-entity-search-for-valid-context-retrieval)
+  * [US-2.2: Retrieve Entity Relationships for Contextual Answers](#us-22-retrieve-entity-relationships-for-contextual-answers)
+  * [US-2.3: Trace Entity Dependencies for Impact Analysis](#us-23-trace-entity-dependencies-for-impact-analysis)
+  * [US-2.4: Validate LLM Function Calling with KG Tools](#us-24-validate-llm-function-calling-with-kg-tools)
+* [Epic 3: Hybrid RAG Integration & Context Orchestration](#epic-3-hybrid-rag-integration--context-orchestration)
+* [Epic 4: Minimal Viable User Interface](#epic-4-minimal-viable-user-interface)
+* [Epic 5: MVP Evaluation and Handoff](#epic-5-mvp-evaluation-and-handoff)
+
+---
+
+# Epic 1: System Analysis and Foundation
+
+* **Objective:** Understand the existing Codegraph AI architecture, define the API boundaries, and establish the minimal chatbot backend.
+* **Key Deliverables:**
+* Inspection report of existing Knowledge Graph and Hybrid RAG capabilities in the Codegraph AI repository.
+* Definition of stable API contracts between the chatbot and Codegraph AI.
+* A basic Python (FastAPI) backend skeleton.
+* Successful end-to-end test call from a local API endpoint to the LLM.
+
+### Analysis of Epic 1 Scope
+
+Epic 1 (System Analysis and Foundation) focuses strictly on project scaffolding, defining the architectural boundaries, and proving the critical integration path to the LLM. Based on your Master Prompt, Epic 1 must deliver:
+
+1. An inspection report and stable API contracts referencing the existing CodeGraph AI systems.
+2. A minimal Python REST API skeleton (e.g., FastAPI).
+3. A successful, testable end-to-end call from the API to the LLM.
+
+To achieve this without prescribing unnecessary implementation details, I have broken this down into **three minimal user stories**: one technical spike for analysis/contracts, one for the backend skeleton, and one for the LLM integration.
+
+### Assumptions & Clarifications
+
+* **Assumption:** The "inspection report" and "API contracts" can be delivered as Markdown documentation and JSON schemas within the new project repository.
+* **Assumption:** We are using a mock/stub strategy for the LLM during TDD to avoid hitting live APIs during automated test runs.
+* **Clarification:** Do you have a specific LLM provider (e.g., OpenAI, Google Gemini, Anthropic) in mind for the MVP, or should the LLM integration story remain generic to any provider via a standard interface? (The stories below are written generically).
+
+Here are the renumbered User Stories for Epic 1:
+
+### US-1.1: Technical Spike — Analyze CodeGraph AI Architecture and Define API Contracts
+
+**User Story:** As an AI engineer, I want to inspect the existing CodeGraph AI repository to identify available Knowledge Graph and Hybrid RAG capabilities, so that I can define stable API contracts for the chatbot without tightly coupling to the existing internal implementation.
+**Business Value:** Ensures the chatbot MVP remains cleanly decoupled from the existing system, minimizing regression risks and defining a clear boundary for future scaling.
+
+**Acceptance Criteria — Given/When/Then:**
+
+* **Scenario 1: Documentation Generation**
+* **Given** access to the existing CodeGraph AI repository
+* **When** the architectural inspection is complete
+* **Then** an inspection report (Markdown) must be committed to the chatbot repository detailing the chosen graph database, vector database, and available internal APIs.
+
+* **Scenario 2: Contract Definition**
+* **Given** the capabilities identified in the inspection
+* **When** defining the interface for the chatbot's tools
+* **Then** a defined API contract (e.g., OpenAPI spec or Pydantic schemas) must be created for `find_entity`, `get_relationships`, and `hybrid_search`.
+
+**TDD Test Scenarios:**
+
+* *Test:* `test_api_contracts_are_valid_schemas` -> Verify that the defined JSON/Pydantic schemas for the internal boundaries compile and pass schema validation without errors.
+
+**Dependencies:** Access to the existing CodeGraph AI repository and documentation.
+**Definition of Done:**
+
+* Inspection report is peer-reviewed (or self-reviewed for a solo dev) and committed to the `docs/` folder.
+* Tool interface schemas/contracts are defined in code (e.g., `contracts.py` or `schemas.py`).
+* Code compiles and schema tests pass.
+
+**Priority:** 1 (Highest — Must be completed before development begins).
+
+
+### US-1.2: Initialize Python REST API Backend Skeleton
+
+**User Story:** As a developer, I want to set up the minimal Python REST API project structure with basic routing and logging, so that I have a foundation to build the chatbot endpoints and automated tests.
+**Business Value:** Provides the foundational infrastructure required to host the chatbot orchestrator and exposes a stable REST interface for the eventual UI/CLI.
+
+**Acceptance Criteria — Given/When/Then:**
+
+* **Scenario 1: Health Check Endpoint**
+* **Given** the backend server is running locally
+* **When** a GET request is sent to the `/health` endpoint
+* **Then** the server responds with a `200 OK` status and a JSON payload indicating the service is healthy (e.g., `{"status": "ok"}`).
+
+* **Scenario 2: Project Structure and Environment**
+* **Given** a fresh clone of the new repository
+* **When** following the setup instructions in the README
+* **Then** the local development environment initializes successfully and the test suite can be run.
+
+**TDD Test Scenarios:**
+
+* *Test:* `test_health_endpoint_returns_200` -> Assert GET `/health` yields status code 200.
+* *Test:* `test_health_endpoint_payload` -> Assert GET `/health` response body strictly matches `{"status": "ok"}`.
+* *Test:* `test_unhandled_route_returns_404` -> Assert GET `/invalid-route` returns a standard 404 response.
+
+**Dependencies:** US-1.1 (Only to ensure the repo structure aligns with the architectural decisions).
+**Definition of Done:**
+
+* REST API framework (e.g., FastAPI/Flask) is installed and configured.
+* `/health` endpoint is implemented and functional.
+* Test framework (e.g., `pytest`) is configured.
+* All TDD tests pass.
+* Minimal `README.md` includes local setup commands (e.g., `pip install -r requirements.txt`, `pytest`).
+
+**Priority:** 2 (High).
+
+
+### US-1.3: Implement Basic LLM Integration and Test Endpoint
+
+**User Story:** As an AI engineer, I want to integrate the backend with the target LLM API and expose a basic test endpoint, so that I can verify the application can successfully authenticate, send prompts, and receive responses from the LLM.
+**Business Value:** Proves the critical technical path for natural language processing, validating API keys, network access, and basic client implementation before adding complex RAG context.
+
+**Acceptance Criteria — Given/When/Then:**
+
+* **Scenario 1: Successful LLM Invocation**
+* **Given** a valid LLM API key and configuration
+* **When** a POST request containing a simple text prompt is sent to `/api/v1/chat/test`
+* **Then** the API forwards the prompt to the LLM and returns the LLM's text response with a `200 OK` status.
+
+* **Scenario 2: Missing or Invalid Authentication**
+* **Given** an invalid or missing LLM API key
+* **When** the `/api/v1/chat/test` endpoint is invoked
+* **Then** the system catches the authentication error gracefully and returns a `500 Internal Server Error` (or `502 Bad Gateway`) with a clean error message detailing an "upstream authentication failure."
+
+**TDD Test Scenarios:**
+
+* *Test:* `test_llm_test_endpoint_success` -> Mock the LLM client to return a static string; assert the endpoint returns 200 and matches the mocked string.
+* *Test:* `test_llm_test_endpoint_auth_failure` -> Mock the LLM client to raise an authentication exception; assert the endpoint catches it and returns the expected 500/502 HTTP status and error JSON.
+* *Test:* `test_llm_test_endpoint_timeout` -> Mock the LLM client to raise a timeout exception; assert the endpoint returns a `504 Gateway Timeout` or equivalent handled response.
+* *Test:* `test_llm_test_endpoint_empty_prompt` -> Assert POSTing an empty prompt returns a `400 Bad Request` prior to calling the LLM.
+
+**Dependencies:** US-1.2 (Requires the API skeleton and test framework).
+**Definition of Done:**
+
+* LLM client (e.g., OpenAI Python SDK or standard HTTP client) is integrated.
+* `POST /api/v1/chat/test` is implemented.
+* Environment variables (e.g., `.env`) are configured to handle API keys securely (never hardcoded).
+* All TDD tests pass (using mocks for external LLM calls).
+
+**Priority:** 3 (High).
+
+---
+
+# Epic 2: Knowledge Graph Tool Implementation
+
+* **Objective:** Enable the LLM to query the existing Knowledge Graph by implementing focused, deterministic function-calling tools.
+* **Key Deliverables:**
+* Implementation of `find_entity(name)` to locate specific codebase elements.
+* Implementation of `get_relationships(entity, relationship_type, direction)`.
+* Implementation of `find_dependencies(entity)` and `find_dependents(entity)`.
+* Validation that the LLM can successfully use these tools to extract facts from the graph database.
+
+### Analysis of Epic 2 Scope
+
+Epic 2 (Knowledge Graph Tool Implementation) is focused strictly on building the deterministic functions that will allow the LLM to query the existing Knowledge Graph, and validating that the LLM can successfully invoke them. According to the Master Prompt, this requires implementing four specific tools (`find_entity`, `get_relationships`, `find_dependencies`, `find_dependents`) and ensuring they return verifiable facts without hallucination.
+
+**Assumptions & Clarifications:**
+
+* **Assumption:** The underlying CodeGraph AI APIs or graph database queries required to fetch this data are already functional and accessible based on the API contracts defined in Epic 1 (US-1.1). These stories focus on building the *wrapper tools* for the LLM, not rebuilding the graph queries themselves.
+* **Assumption:** `find_dependencies` and `find_dependents` are treated as specialized, convenience wrappers (likely built on top of `get_relationships`) designed to reduce the cognitive load and multi-step reasoning required by the LLM for impact analysis queries.
+* **Assumption:** To adhere to TDD, we will mock the actual CodeGraph AI backend responses during testing to ensure these tools are tested in isolation.
+
+Here is the smallest logical set of user stories to deliver Epic 2 end-to-end.
+
+
+### US-2.1: Knowledge Graph Entity Search for Valid Context Retrieval
+
+**User Story:** As a chatbot orchestrator, I want a specialized tool to search for a specific entity by name in the Knowledge Graph, so that I can establish a valid starting node for context retrieval without hallucinating entity names.
+**Business Value:** This is the foundational tool. It grounds the LLM in reality by forcing it to verify the existence and exact identifier of a codebase component before attempting to traverse its relationships.
+
+**Acceptance Criteria — Given/When/Then:**
+
+* **Scenario 1: Entity exists**
+* **Given** a valid entity name exists in the Knowledge Graph
+* **When** the `find_entity(name)` tool is invoked
+* **Then** it returns the standard entity object (including its unique ID, type, and exact name) as a JSON-serializable dictionary.
+
+* **Scenario 2: Entity does not exist**
+* **Given** an entity name that does not exist in the Knowledge Graph
+* **When** the `find_entity(name)` tool is invoked
+* **Then** it returns a clear "not found" response indicator rather than throwing an unhandled exception.
+
+**TDD Test Scenarios:**
+
+* *Test:* `test_find_entity_exact_match` -> Mock the backend API to return an entity; assert the tool parses and returns the expected dictionary.
+* *Test:* `test_find_entity_not_found` -> Mock the backend API to return empty/404; assert the tool returns a graceful "not found" payload.
+* *Test:* `test_find_entity_backend_timeout` -> Mock a timeout from the backend API; assert the tool catches it and returns a standard error message string suitable for the LLM.
+
+**Dependencies:** US-1.1 (API Contracts).
+**Definition of Done:**
+
+* `find_entity` Python function is implemented.
+* Function includes clear docstrings formatted for LLM tool consumption.
+* All TDD test cases pass using mocked backend responses.
+* Tool strictly adheres to the input/output schema defined in US-1.1.
+**Priority:** 1 (Highest — Prerequisite for all other traversals).
+
+
+### US-2.2: Retrieve Entity Relationships for Contextual Answers
+
+**User Story:** As a chatbot orchestrator, I want a tool to retrieve the surrounding relationships for a verified entity, so that I can extract structural context and connections to provide detailed engineering answers.
+**Business Value:** Enables the LLM to answer "how does this work" or "what connects to this" by traversing the graph database iteratively.
+
+**Acceptance Criteria — Given/When/Then:**
+
+* **Scenario 1: Valid retrieval**
+* **Given** a valid entity ID and relationship direction (inbound, outbound, or both)
+* **When** the `get_relationships(entity, relationship_type, direction)` tool is invoked
+* **Then** it returns a structured list of connected nodes and the specific edge types connecting them.
+
+* **Scenario 2: No relationships found**
+* **Given** a valid entity ID that has no connections matching the requested parameters
+* **When** the tool is invoked
+* **Then** it returns an empty list `[]`.
+
+**TDD Test Scenarios:**
+
+* *Test:* `test_get_relationships_outbound_success` -> Provide mock entity and "outbound" direction; assert correct connected nodes are returned.
+* *Test:* `test_get_relationships_inbound_success` -> Provide mock entity and "inbound" direction; assert correct connected nodes are returned.
+* *Test:* `test_get_relationships_empty_result` -> Mock an entity with no connections; assert an empty list is returned.
+* *Test:* `test_get_relationships_invalid_entity` -> Provide a null or malformed entity ID; assert a validation error is returned.
+
+**Dependencies:** US-2.1 (Depends on the entity schema).
+**Definition of Done:**
+
+* `get_relationships` Python function is implemented with LLM-friendly docstrings.
+* All TDD test cases pass.
+* Tool response data is minimized to exclude unnecessary graph metadata, keeping the LLM context window clean.
+**Priority:** 2 (High).
+
+
+### US-2.3: Trace Entity Dependencies for Impact Analysis
+
+**User Story:** As a chatbot orchestrator, I want dedicated tools for finding what an entity depends on and what depends on it, so that the LLM can efficiently answer impact analysis questions without needing to manually map complex relationship queries.
+**Business Value:** Greatly improves the reliability and speed of answering "what is impacted if I change X?" queries by providing a simplified, direct interface for the LLM.
+
+**Acceptance Criteria — Given/When/Then:**
+
+* **Scenario 1: Find Dependencies (Downstream)**
+* **Given** a valid entity ID
+* **When** `find_dependencies(entity)` is invoked
+* **Then** it returns a list of components that the given entity relies upon to function.
+
+* **Scenario 2: Find Dependents (Upstream / Impact)**
+* **Given** a valid entity ID
+* **When** `find_dependents(entity)` is invoked
+* **Then** it returns a list of components that rely on the given entity.
+
+**TDD Test Scenarios:**
+
+* *Test:* `test_find_dependencies_returns_list` -> Mock downstream components; assert function returns them.
+* *Test:* `test_find_dependents_returns_list` -> Mock upstream components; assert function returns them.
+* *Test:* `test_find_dependencies_none_exist` -> Assert empty list returned when no dependencies exist.
+
+**Dependencies:** US-2.1 (Entity schema). May internally reuse logic from US-2.2.
+**Definition of Done:**
+
+* Both functions are implemented with clear, distinct docstrings.
+* All TDD tests pass.
+**Priority:** 2 (High).
+
+
+### US-2.4: Validate LLM Function Calling with KG Tools
+
+**User Story:** As an AI engineer, I want to bind the implemented Knowledge Graph tools to the LLM client, so that the LLM can autonomously recognize when to use a tool, format the execution request, and process the resulting tool output into a conversational response.
+**Business Value:** This is the integration point that proves the core mechanics of the Agentic architecture. It transforms the system from a simple text-generator into an active retriever of CodeGraph facts.
+
+**Acceptance Criteria — Given/When/Then:**
+
+* **Scenario 1: Autonomous Tool Selection**
+* **Given** an LLM initialized with the 4 KG tools
+* **When** prompted with "Find the PaymentService entity"
+* **Then** the LLM pauses generation and outputs a structured tool call request specifically for `find_entity("PaymentService")`.
+
+* **Scenario 2: Handling Tool Responses**
+* **Given** an active tool call generated by the LLM
+* **When** the backend executes the tool and returns the JSON result to the LLM
+* **Then** the LLM resumes generation and incorporates the factual tool result into its final text response.
+
+**TDD Test Scenarios:**
+
+* *Test:* `test_llm_tool_binding` -> Assert that the tool schemas are correctly formatted and accepted by the LLM provider's API during initialization without validation errors.
+* *Test:* `test_llm_invokes_correct_tool` -> Using a mocked LLM response, assert that the orchestrator correctly parses a tool-call request and routes it to the correct local Python function.
+* *Test:* `test_orchestrator_returns_tool_data_to_llm` -> Assert that the orchestrator correctly formats the tool's return value into the necessary `tool_message` structure required by the LLM to continue the conversation.
+
+**Dependencies:** US-1.3 (Base LLM integration), US-2.1, US-2.2, US-2.3.
+**Definition of Done:**
+
+* LLM orchestration logic is updated to handle multi-turn function calling (Tool Call -> Tool Execution -> Tool Response -> Final Answer).
+* All tools are successfully bound to the LLM client.
+* TDD tests for the orchestrator routing logic pass.
+**Priority:** 3 (High — Completes Epic 2).
+
+---
+
+# Epic 3: Hybrid RAG Integration & Context Orchestration
+
+* **Objective:** Connect the existing document/source code vector retrieval system and build the intelligence layer that decides how to fetch and combine information.
+* **Key Deliverables:**
+* Implementation of the `hybrid_search(query, filters)` tool leveraging the existing Codegraph AI Vector DB.
+* Context Orchestrator that allows the LLM to choose between KG retrieval, Hybrid RAG, or both.
+* Prompt engineering to ensure responses strictly follow the "Grounded Answer" format (Answer, Flow, Evidence, Confidence) without exposing chain-of-thought.
+
+---
+
+# Epic 4: Minimal Viable User Interface
+
+* **Objective:** Build a simple, functional interface (Web UI or CLI) for developers to interact with the Copilot.
+* **Key Deliverables:**
+* A basic chat interface supporting session-based conversation history.
+* Clear visual distinction between the LLM's explanation and the retrieved evidence/sources.
+* Implementation of loading states and error handling for missing information.
+
+---
+
+# Epic 5: MVP Evaluation and Handoff
+
+* **Objective:** Validate the chatbot's effectiveness, ensure it meets the "Definition of Done," and package the project for future iterations.
+* **Key Deliverables:**
+* Creation of a 20-question engineering benchmark dataset (covering architecture, dependencies, impacts, etc.).
+* Evaluation results focusing on correctness, grounding, and hallucination rates.
+* Finalized documentation including a README, setup instructions, known limitations, and an architecture diagram.
+</file>
+
+<file path="tests/unit/foundation/test_contracts.py">
+# tests/test_contracts.py
+
+# This file contains the unit tests for validating the Pydantic API contracts
+# between the Chatbot Orchestrator and the CodeGraph AI tools.
+
+import pytest
+from pydantic import ValidationError
+
+from backend.contracts import (
+    FindEntityRequest,
+    GetRelationshipsRequest,
+    FindDependenciesRequest,
+    HybridSearchRequest,
+    DirectionEnum,
+    ConfidenceEnum,  # <-- ADDED IMPORT
+    GroundedAnswerResponse,
+)
+
+
+def test_find_entity_request_valid() -> None:
+    req = FindEntityRequest(name="PaymentService", entity_type="class")
+    assert req.name == "PaymentService"
+    assert req.entity_type == "class"
+
+
+def test_find_entity_request_invalid_strict_type() -> None:
+    with pytest.raises(ValidationError):
+        # Tell mypy to ignore this intentional type violation
+        FindEntityRequest(name=123)  # type: ignore
+
+
+def test_get_relationships_request_valid() -> None:
+    req = GetRelationshipsRequest(
+        entity_name="UserService",
+        relationship_type="CALLS",
+        direction=DirectionEnum.OUTBOUND,
+    )
+    assert req.entity_name == "UserService"
+    assert req.direction == DirectionEnum.OUTBOUND
+
+
+def test_get_relationships_request_invalid_direction() -> None:
+    with pytest.raises(ValidationError):
+        # Tell mypy to ignore this intentional type violation
+        GetRelationshipsRequest(entity_name="UserService", direction="diagonal")  # type: ignore
+
+
+def test_dependency_requests_default_depth() -> None:
+    dep_req = FindDependenciesRequest(entity_name="AuthService")
+    assert dep_req.depth == 1
+
+    with pytest.raises(ValidationError):
+        # Tell mypy to ignore this intentional type violation
+        FindDependenciesRequest(entity_name="AuthService", depth="two")  # type: ignore
+
+
+def test_hybrid_search_request_valid() -> None:
+    req = HybridSearchRequest(
+        query="How does auth work?", top_k=3, filters={"module": "auth"}
+    )
+    assert req.query == "How does auth work?"
+    assert req.top_k == 3
+    assert req.filters == {"module": "auth"}
+
+
+def test_grounded_answer_schema() -> None:
+    req = GroundedAnswerResponse(
+        answer="Auth starts in AuthController.",
+        flow=["AuthController", "AuthService"],
+        evidence=[
+            "Knowledge Graph: AuthController -> AuthService",
+            "Source: AuthController.java",
+        ],
+        confidence=ConfidenceEnum.HIGH,
+    )
+    assert len(req.flow) == 2
+    assert "AuthController.java" in req.evidence[1]
+    assert req.confidence == ConfidenceEnum.HIGH
+</file>
+
+<file path="tests/unit/foundation/test_llm_endpoint.py">
+# tests/foundation/test_llm_endpoint.py
+
+# This file contains the unit tests for the basic LLM test endpoint,
+# validating success paths, empty prompts, and upstream API errors.
+
+from unittest.mock import MagicMock, patch
+from fastapi.testclient import TestClient
+import httpx2
+import openai
+
+from backend.main import app
+
+client = TestClient(app)
+
+
+# Helper to generate a mock httpx2.Response for openai errors
+def _mock_response(status_code: int) -> httpx2.Response:
+    request = httpx2.Request("POST", "https://api.openai.com/v1/chat/completions")
+    return httpx2.Response(status_code=status_code, request=request)
+
+
+def test_llm_test_endpoint_empty_prompt() -> None:
+    """Assert POSTing an empty prompt returns a 400 Bad Request."""
+    response = client.post("/api/v1/chat/test", json={"prompt": "   "})
+    assert response.status_code == 400
+    assert "empty" in response.json()["detail"].lower()
+
+
+# FIXED: Patching backend.main.call_llm instead of backend.llm.call_llm
+@patch("backend.main.call_llm")
+def test_llm_test_endpoint_success(mock_call_llm: MagicMock) -> None:
+    """Assert the endpoint returns 200 and matches the mocked string on success."""
+    mock_call_llm.return_value = "Mocked LLM response."
+    response = client.post("/api/v1/chat/test", json={"prompt": "Hello"})
+
+    assert response.status_code == 200
+    assert response.json() == {"response": "Mocked LLM response."}
+    mock_call_llm.assert_called_once_with("Hello")
+
+
+# FIXED: Patching backend.main.call_llm
+@patch("backend.main.call_llm")
+def test_llm_test_endpoint_auth_failure(mock_call_llm: MagicMock) -> None:
+    """Assert auth exceptions yield a 502 with a clean error message."""
+    mock_call_llm.side_effect = openai.AuthenticationError(
+        message="Invalid API Key", response=_mock_response(401), body=None
+    )
+    response = client.post("/api/v1/chat/test", json={"prompt": "Hello"})
+
+    assert response.status_code == 502
+    assert "upstream authentication failure" in response.json()["detail"].lower()
+
+
+# FIXED: Patching backend.main.call_llm
+@patch("backend.main.call_llm")
+def test_llm_test_endpoint_timeout(mock_call_llm: MagicMock) -> None:
+    """Assert timeout exceptions yield a 504 Gateway Timeout."""
+    mock_call_llm.side_effect = openai.APITimeoutError(
+        request=_mock_response(408).request
+    )
+    response = client.post("/api/v1/chat/test", json={"prompt": "Hello"})
+
+    assert response.status_code == 504
+    assert "timeout" in response.json()["detail"].lower()
+</file>
+
+<file path="tests/unit/foundation/test_llm.py">
+# tests/unit/foundation/test_llm.py
+
+# This file contains the unit tests for the LLM client wrapper.
+
+from unittest.mock import MagicMock, patch
+from backend.llm import call_llm
+
+
+@patch("backend.llm.client.chat.completions.create")
+def test_call_llm_success(mock_create: MagicMock) -> None:
+    """Test that call_llm successfully parses a valid LLM response."""
+    mock_response = MagicMock()
+    mock_message = MagicMock()
+    mock_message.content = "Mocked LLM response"
+    mock_choice = MagicMock()
+    mock_choice.message = mock_message
+    mock_response.choices = [mock_choice]
+
+    mock_create.return_value = mock_response
+
+    result = call_llm("Explain the architecture.")
+
+    assert result == "Mocked LLM response"
+    mock_create.assert_called_once()
+
+
+@patch("backend.llm.client.chat.completions.create")
+def test_call_llm_empty_response(mock_create: MagicMock) -> None:
+    """Test that call_llm handles an empty/None response gracefully."""
+    mock_response = MagicMock()
+    mock_message = MagicMock()
+    mock_message.content = None
+    mock_choice = MagicMock()
+    mock_choice.message = mock_message
+    mock_response.choices = [mock_choice]
+
+    mock_create.return_value = mock_response
+
+    result = call_llm("Say nothing.")
+
+    assert result == ""
+    mock_create.assert_called_once()
+</file>
+
+<file path="tests/unit/foundation/test_main.py">
+# tests/foundation/test_main.py
+
+# This file contains the unit tests for the main FastAPI application skeleton,
+# specifically testing health checks and basic routing.
+
+from fastapi.testclient import TestClient
+
+# We will create backend.main in the Green phase
+from backend.main import app
+
+client = TestClient(app)
+
+
+def test_health_endpoint_returns_200_and_payload() -> None:
+    """Assert GET /health yields status code 200 and matches {"status": "ok"}."""
+    response = client.get("/health")
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+
+
+def test_unhandled_route_returns_404() -> None:
+    """Assert GET /invalid-route returns a standard 404 response."""
+    response = client.get("/invalid-route")
+    assert response.status_code == 404
+</file>
+
+<file path="tests/unit/kgtools/test_find_entity.py">
+# tests/unit/kgtools/test_find_entity.py
+
+# This file contains the unit tests for the find_entity Knowledge Graph tool.
+
+from typing import Dict, Any, Optional
+from backend.kgtools.tools import find_entity
+from backend.kgtools.client import KGClient, KGTimeoutError
+
+
+class MockKGClientForFindEntity:
+    def search_entity(self, name: str) -> Optional[Dict[str, Any]]:
+        if name == "PaymentService":
+            return {"id": "ent_123", "type": "Class", "name": "PaymentService"}
+        if name == "TimeoutService":
+            raise KGTimeoutError("Connection timed out")
+        return None
+
+    def fetch_relationships(
+        self, entity_id: str, direction: str, relationship_type: Optional[str] = None
+    ) -> list[Dict[str, Any]]:
+        return []
+
+
+def test_find_entity_exact_match() -> None:
+    """Test US-2.1 Scenario 1: Entity exists."""
+    client: KGClient = MockKGClientForFindEntity()
+    result = find_entity("PaymentService", client)
+
+    assert result is not None
+    assert result.get("id") == "ent_123"
+    assert result.get("type") == "Class"
+    assert result.get("name") == "PaymentService"
+
+
+def test_find_entity_not_found() -> None:
+    """Test US-2.1 Scenario 2: Entity does not exist."""
+    client: KGClient = MockKGClientForFindEntity()
+    result = find_entity("NonExistentService", client)
+
+    assert result.get("status") == "not found"
+    assert "not found" in result.get("message", "").lower()
+
+
+def test_find_entity_backend_timeout() -> None:
+    """Test US-2.1 Edge Case: Backend timeout."""
+    client: KGClient = MockKGClientForFindEntity()
+    result = find_entity("TimeoutService", client)
+
+    assert result.get("status") == "error"
+    # Changed "timeout" to "timed out" to match the actual error message
+    assert "timed out" in result.get("message", "").lower()
+</file>
+
+<file path="tests/unit/kgtools/test_get_relationships.py">
+# tests/unit/kgtools/test_get_relationships.py
+
+# This file contains the unit tests for the get_relationships Knowledge Graph tool.
+
+import pytest
+from typing import Dict, Any, Optional, List
+from backend.kgtools.tools import get_relationships
+from backend.kgtools.client import KGClient
+
+
+class MockKGClientForGetRelationships:
+    def search_entity(self, name: str) -> Optional[Dict[str, Any]]:
+        return None
+
+    def fetch_relationships(
+        self, entity_id: str, direction: str, relationship_type: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        if entity_id == "ent_123":
+            if direction == "outbound":
+                return [{"target_id": "ent_456", "edge_type": "CALLS"}]
+            if direction == "inbound":
+                return [{"source_id": "ent_789", "edge_type": "DEPENDS_ON"}]
+        return []
+
+
+def test_get_relationships_outbound_success() -> None:
+    """Test US-2.2 Scenario 1: Valid retrieval (Outbound)."""
+    client: KGClient = MockKGClientForGetRelationships()
+    result = get_relationships("ent_123", "outbound", client)
+
+    assert len(result) == 1
+    assert result[0]["target_id"] == "ent_456"
+    assert result[0]["edge_type"] == "CALLS"
+
+
+def test_get_relationships_inbound_success() -> None:
+    """Test US-2.2 Scenario 1: Valid retrieval (Inbound)."""
+    client: KGClient = MockKGClientForGetRelationships()
+    result = get_relationships("ent_123", "inbound", client)
+
+    assert len(result) == 1
+    assert result[0]["source_id"] == "ent_789"
+    assert result[0]["edge_type"] == "DEPENDS_ON"
+
+
+def test_get_relationships_empty_result() -> None:
+    """Test US-2.2 Scenario 2: No relationships found."""
+    client: KGClient = MockKGClientForGetRelationships()
+    result = get_relationships("ent_orphan", "both", client)
+
+    assert isinstance(result, list)
+    assert len(result) == 0
+
+
+def test_get_relationships_invalid_entity() -> None:
+    """Test US-2.2 Edge Case: Null or malformed entity ID returns validation error."""
+    client: KGClient = MockKGClientForGetRelationships()
+
+    with pytest.raises(ValueError, match="Invalid entity ID"):
+        get_relationships("", "outbound", client)
+
+    with pytest.raises(ValueError, match="Invalid entity ID"):
+        get_relationships(None, "outbound", client)  # type: ignore[arg-type]
+</file>
+
+<file path="README.md">
+# codegraph-copilot
+CodeGraph Copilot turns an enterprise codebase into an interactive AI engineering assistant that developers can query, explore, and reason about in natural language.
+
+# README.md
+
+# This file contains the local setup and execution instructions for the 
+# CodeGraph Engineering Copilot MVP.
+
+# CodeGraph Engineering Copilot
+
+A minimal, 1-week MVP chatbot powered by CodeGraph AI's Knowledge Graph and Hybrid RAG capabilities.
+
+## Prerequisites
+* Python 3.10+
+* [uv](https://docs.astral.sh/uv/) for fast dependency management.
+
+## Local Setup
+
+1. **Clone the repository and navigate to the root directory.**
+2. **Install dependencies and setup the virtual environment:**
+   ```bash
+   uv sync
+</file>
+
+<file path="backend/config.py">
+# backend/config.py
+
+# This file manages application configuration and environment variables
+# using pydantic-settings, ensuring model names and endpoints are configurable.
+
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    """Application settings loaded from environment variables."""
+
+    llm_base_url: str = "http://localhost:11434/v1"
+    llm_model: str = "qwen2.5-coder:3b"
+    llm_api_key: str = "ollama"
+
+    # Neo4j Graph Database Settings
+    neo4j_uri: str = "bolt://localhost:7687"
+    neo4j_user: str = "neo4j"
+    neo4j_password: str = "password"
+
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+settings = Settings()
+</file>
+
+<file path="backend/orchestrator.py">
+# backend/orchestrator.py
+
+# This file handles the conversation loop and tool execution binding for the chatbot.
+
+import json
+import logging
+from typing import List, Any, cast
+import openai
+from openai.types.chat import ChatCompletionMessageParam
+from backend.config import settings
+from backend.kgtools.tool_schemas import KG_TOOLS
+from backend.kgtools.tools import find_entity, get_relationships, find_dependencies, find_dependents
+from backend.kgtools.client import KGClient
+
+logger = logging.getLogger(__name__)
+
+client = openai.Client(
+    base_url=settings.llm_base_url,
+    api_key=settings.llm_api_key,
+)
+
+SYSTEM_PROMPT = (
+    "You are CodeGraph Engineering Copilot. You MUST use the provided Knowledge Graph tools "
+    "to inspect the codebase. Always call `find_entity` first to locate entity IDs. "
+    "- To find external dependencies or downstream services, use `find_dependencies`. "
+    "- To find upstream impact or callers, use `find_dependents`. "
+    "- To find source code files or internal components belonging to a service, use `get_relationships` with direction='inbound'. "
+    "Ground all answers strictly in the tool results."
+)
+
+def execute_tool_call(func_name: str, args: dict[str, Any], kg_client: KGClient) -> str:
+    """Routes a tool call request to the actual Python function."""
+    try:
+        if func_name == "find_entity":
+            result = find_entity(args["name"], kg_client)
+        elif func_name == "get_relationships":
+            result = get_relationships(
+                args["entity_id"], 
+                args["direction"], 
+                kg_client, 
+                args.get("relationship_type")
+            )
+        elif func_name == "find_dependencies":
+            result = find_dependencies(args["entity_id"], kg_client)
+        elif func_name == "find_dependents":
+            result = find_dependents(args["entity_id"], kg_client)
+        else:
+            return json.dumps({"error": f"Unknown tool: {func_name}"})
+            
+        return json.dumps(result)
+    except Exception as e:
+        logger.error(f"Error executing {func_name}: {e}")
+        return json.dumps({"error": str(e)})
+
+def run_chat_cycle(prompt: str, kg_client: KGClient) -> str:
+    """
+    Executes a multi-turn chat cycle, handling autonomous tool selection
+    and passing tool responses back to the LLM.
+    """
+    messages: List[ChatCompletionMessageParam] = [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": prompt},
+    ]
+    
+    max_turns = 5
+    
+    for _ in range(max_turns):
+        response = client.chat.completions.create(
+            model=settings.llm_model,
+            messages=messages,
+            tools=KG_TOOLS,
+            tool_choice="auto",
+        )
+        
+        response_message = response.choices[0].message
+        
+        # If no tools are called, the model is providing its final synthesis
+        if not response_message.tool_calls:
+            return response_message.content or ""
+            
+        # Append the assistant's tool-call request to the conversation history
+        assistant_entry: dict[str, Any] = {
+            "role": "assistant",
+            "content": response_message.content,
+            "tool_calls": [
+                {
+                    "id": tc.id,
+                    "type": tc.type,
+                    "function": {
+                        "name": tc.function.name,
+                        "arguments": tc.function.arguments,
+                    },
+                }
+                for tc in response_message.tool_calls
+            ],
+        }
+        messages.append(cast(ChatCompletionMessageParam, assistant_entry))
+        
+        # Execute each requested tool and append the results
+        for tool_call in response_message.tool_calls:
+            try:
+                args = json.loads(tool_call.function.arguments)
+            except json.JSONDecodeError:
+                args = {}
+                
+            tool_result = execute_tool_call(tool_call.function.name, args, kg_client)
+            
+            messages.append({
+                "role": "tool",
+                "tool_call_id": tool_call.id,
+                "content": tool_result,
+            })
+            
+    return "Error: Maximum tool iterations reached without final answer."
+</file>
+
+<file path="scripts/verify_chat.py">
+# scripts/verify_chat.py
+
+# CLI utility to run functional chat cycles against the live Neo4j Knowledge Graph.
+
+import sys
+import os
+from pathlib import Path
+
+# Add project root directory to sys.path
+project_root = str(Path(__file__).parent.parent)
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+
+from backend.orchestrator import run_chat_cycle
+from backend.kgtools.neo4j_client import Neo4jKGClient
+
+def main() -> None:
+    print("=== Connecting to Neo4j Knowledge Graph (CodeGraph AI) ===")
+    kg_client = Neo4jKGClient()
+    
+    print("Connected successfully!")
+    print("Type your microservices queries below, or 'exit' to quit.\n")
+
+    try:
+        while True:
+            user_input = input("Developer > ").strip()
+            if not user_input or user_input.lower() in ("exit", "quit"):
+                break
+
+            answer = run_chat_cycle(user_input, kg_client)
+            print(f"\nCopilot >\n{answer}\n")
+            print("-" * 50)
+    finally:
+        kg_client.close()
+
+if __name__ == "__main__":
+    main()
+</file>
+
+<file path="pyproject.toml">
+# pyproject.toml
+
+[project]
+name = "codegraph-engineering-copilot"
+version = "0.1.0"
+description = "AI Engineering Chatbot MVP"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi[standard]>=0.141.1",
+    "neo4j>=6.3.1",
+    "openai>=3.3.1",
+    "pydantic>=2.0.0",
+    "pydantic-settings>=2.15.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-cov>=5.0.0",
+    "mypy>=1.0.0",
+    "httpx>=0.28.1",
+    "httpx2>=2.12.0",
+]
+
+[tool.pytest.ini_options]
+addopts = "--cov=backend --cov-report=term-missing --cov-fail-under=80"
+testpaths = ["tests"]
+pythonpath = ["."]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+    "ignore::UserWarning"
+]
+
+[tool.mypy]
+strict = true
+disallow_untyped_decorators = false
+warn_return_any = true
+show_error_codes = true
+plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+module = [
+    "fastapi.*",
+    "httpx.*",
+    "openai.*"
+]
+ignore_missing_imports = true
+</file>
+
+</files>
