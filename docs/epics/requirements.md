@@ -20,6 +20,9 @@
   * [US-4.2: Build Minimal Web Chat Interface](#us-42-build-minimal-web-chat-interface)
   * [US-4.3: Render Markdown and Evidence Display](#us-43-render-markdown-and-evidence-display)
 * [Epic 5: MVP Evaluation and Handoff](#epic-5-mvp-evaluation-and-handoff)
+  * [US-5.1: Create Engineering Benchmark Dataset](#us-51-create-engineering-benchmark-dataset)
+  * [US-5.2: Develop Automated Evaluation Runner](#us-52-develop-automated-evaluation-runner)
+  * [US-5.3: Project Documentation and Handoff](#us-53-project-documentation-and-handoff)
 
 ---
 
@@ -547,3 +550,110 @@ Here are the implementation-ready User Stories for Epic 4.
 * Creation of a 20-question engineering benchmark dataset (covering architecture, dependencies, impacts, etc.).
 * Evaluation results focusing on correctness, grounding, and hallucination rates.
 * Finalized documentation including a README, setup instructions, known limitations, and an architecture diagram.
+
+**Analysis and Assumptions Check for Epic 5**
+Before drafting the stories, here are the explicit assumptions made to bound the scope of this MVP handoff:
+
+1. **Dataset Context:** The 20 questions will be specifically tailored to the "Google Online Boutique Microservices Demo," as this is the active dataset populated in the local Neo4j database.
+2. **Evaluation Automation:** Fully automated grading (e.g., using an LLM-as-a-judge to score correctness out of 10) introduces unnecessary complexity for a 1-week MVP. The evaluation runner will automate the *execution* and *reporting* of the benchmark, allowing a developer to quickly review the output matrix for correctness, grounding, and hallucinations.
+3. **TDD for Documentation:** While documentation isn't standard code, we will enforce TDD by writing tests that assert the existence of the `README.md` and the presence of required structural headers.
+
+Here is the logical set of user stories to deliver Epic 5 end-to-end.
+
+### US-5.1: Create Engineering Benchmark Dataset
+
+**User Story:** As an AI engineer, I want to define a 20-question benchmark dataset with expected answers, so that I can systematically evaluate the Copilot's accuracy against the Google Microservices architecture.
+**Business Value:** Establishes a quantitative baseline to measure the chatbot's correctness, grounding, and hallucination rates.
+
+**Acceptance Criteria — Given/When/Then:**
+
+* **Scenario 1: Dataset Composition**
+* **Given** the need to test the Copilot's capabilities
+* **When** the benchmark dataset is finalized
+* **Then** it contains exactly 20 unique questions.
+
+* **Scenario 2: Question Variety & Structure**
+* **Given** the benchmark dataset
+* **When** reviewing the contents
+* **Then** each entry contains a `question`, an `expected_answer`, and a `category` (Structural, Semantic, Hybrid, or Out-of-Scope guardrail test).
+
+**TDD Test Scenarios:**
+
+* *Test:* `test_benchmark_dataset_validity` -> Load the JSON/CSV dataset file, assert `len(questions) == 20`, and assert all required keys (`question`, `expected_answer`, `category`) exist and are non-empty strings.
+
+**Dependencies:** None.
+**Definition of Done:**
+
+* Dataset file (e.g., `tests/evaluation/benchmark.json`) is committed to the repository.
+* Dataset covers the Google Microservices demo specifically.
+* TDD tests validating the dataset schema pass.
+**Priority:** High
+
+### US-5.2: Develop Automated Evaluation Runner
+
+**User Story:** As a tester, I want an automated script to execute the benchmark dataset against the Copilot API, so that I can rapidly collect responses and evaluate system performance without manual data entry.
+**Business Value:** Replaces manual QA testing with an automated pipeline, enabling repeatable evaluation loops for future iterations.
+
+**Acceptance Criteria — Given/When/Then:**
+
+* **Scenario 1: End-to-End Execution**
+* **Given** the benchmark dataset and a running local FastAPI server
+* **When** the evaluation script is executed
+* **Then** it iterates through all 20 questions, sending a POST request to `/api/v1/chat` for each.
+
+* **Scenario 2: Output Report Generation**
+* **Given** the evaluation script has finished iterating
+* **When** it terminates
+* **Then** it outputs a file (e.g., `evaluation_report.json` or `.csv`) containing the original question, expected answer, the Copilot's actual response, and the HTTP status code.
+
+* **Scenario 3: Fault Tolerance**
+* **Given** the evaluation runner is processing questions
+* **When** the API returns a `500 Internal Server Error` (e.g., Neo4j OOM crash) or times out
+* **Then** the script logs the failure for that specific question, records the error in the output report, and continues processing the remaining questions.
+
+**TDD Test Scenarios:**
+
+* *Test:* `test_evaluation_runner_success` -> Mock the API POST call to return a valid response. Run the evaluator function on a dummy 2-question dataset. Assert the output report contains exactly 2 processed results with the mocked data.
+* *Test:* `test_evaluation_runner_api_failure` -> Mock the API POST call to raise a timeout exception. Assert the script catches the exception, marks the question as failed in the report, and does not crash.
+
+**Dependencies:** US-5.1 (Dataset), US-4.1 (API Endpoint).
+**Definition of Done:**
+
+* Python script (e.g., `scripts/run_evaluation.py`) is committed.
+* Script successfully generates a report when run locally.
+* TDD tests for the script pass with >=80% coverage.
+**Priority:** High
+
+### US-5.3: Project Documentation and Handoff
+
+**User Story:** As a developer taking over the project, I want comprehensive documentation and setup instructions, so that I can run the MVP, understand its architecture, and know its current limitations.
+**Business Value:** Ensures the 1-week MVP is usable, maintainable, and clearly scoped for future teams, fulfilling the final master prompt requirement.
+
+**Acceptance Criteria — Given/When/Then:**
+
+* **Scenario 1: Setup and Execution Documentation**
+* **Given** a fresh environment
+* **When** I follow the "Setup Instructions" in the README
+* **Then** I am provided with the exact `uv`, `make`, and environment variable commands needed to install dependencies, connect to Neo4j, and run the server.
+
+* **Scenario 2: Architecture and Limitations**
+* **Given** the repository documentation
+* **When** I review the README
+* **Then** it includes a defined "Architecture" section (explaining FastAPI, Neo4j, and the Orchestrator loop) and a "Known Limitations" section (documenting the Docker memory requirements and exact-match NLP constraints discovered in Epic 3/4).
+
+* **Scenario 3: Evaluation Results Transparency**
+* **Given** the evaluation runner has been executed
+* **When** I review the documentation
+* **Then** a summary of the MVP's performance (hallucination rate, grounding success) is explicitly stated.
+
+**TDD Test Scenarios:**
+
+* *Test:* `test_readme_contains_required_sections` -> Read `README.md` via Python. Assert the text contains the required Markdown headers (`## Setup Instructions`, `## Architecture`, `## Known Limitations`, `## Evaluation Summary`).
+
+**Dependencies:** US-5.2 (To populate the Evaluation Summary).
+**Definition of Done:**
+
+* `README.md` is fully updated and formatted.
+* Setup steps are manually verified by running them in a clean terminal.
+* TDD test asserting document structure passes.
+**Priority:** High
