@@ -21,9 +21,15 @@ check: typecheck test
 chat:
 	uv run python -m scripts.verify_chat
 
+rag_eval:
+	uv run python -m scripts.rag_evaluator
+
+run_eval:
+	uv run python -m scripts.run_evaluation
+
 # Run the local REST API server
 run:
-	uv run uvicorn backend.main:app --reload --host 0.0.0.0 --port 8000
+	uv run uvicorn backend.main:app --reload --host 0.0.0.0 --port 8002
 
 # Clean cache directories
 clean:

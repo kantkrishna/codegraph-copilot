@@ -9,12 +9,46 @@
 * Ensure your `.env` file is set up with necessary environment variables.
 
 ## Setup Instructions
+
 1. Install dependencies using `uv sync`.
 2. Ensure your local Neo4j database (Codegraph AI) is running via Docker Desktop.
 3. Configure your `.env` file with `NEO4J_URI`, `NEO4J_USER`, `NEO4J_PASSWORD`, and `LLM_API_KEY`.
-4. **To run the Web UI and API:** Execute `make run`, then access the Copilot via `http://localhost:8000`.
+4. **To run the Web UI and API:** Execute `make run`, then access the Copilot via `http://localhost:8002`.
 5. **To run the CLI Chat:** Execute `make chat` (or `uv run python -m scripts.verify_chat`) to launch the interactive terminal REPL.
 6. **To run the Automated Evaluation:** Execute `uv run python scripts/run_evaluation.py` to test the Copilot against the benchmark dataset.
+
+## RAGAS Evaluation Pipeline
+
+To ensure the Copilot's answers remain strictly grounded in the Neo4j Knowledge Graph without hallucination, this project includes a custom-built, thread-isolated evaluation microservice powered by the [Ragas](https://docs.ragas.io/) framework.
+
+The evaluator acts as an LLM-as-a-Judge, scoring the Copilot against a benchmark dataset (`tests/evaluation/benchmark.json`) across three primary metrics:
+* **Faithfulness:** Ensures every claim in the Copilot's Answer is explicitly supported by its Evidence block.
+* **Context Precision:** Verifies that the Graph traversal tools retrieved highly relevant context for the user's query.
+* **Answer Relevancy:** Measures how accurately the Copilot's answer addresses the original prompt without omitting information or pivoting subjects.
+
+### Architectural Highlights
+Integrating Ragas with FastAPI and Langchain presents severe asynchronous event loop challenges. This pipeline implements several enterprise patterns to guarantee stability:
+* **Dedicated Immortal Worker Thread:** Bypasses FastAPI's thread-pool recycling. All evaluations are fed via a thread-safe queue into a single, permanent background loop. This completely eliminates LangChain `httpx` cache leaks and `Event loop is closed` crashes.
+* **Judge Model Override:** Advanced reasoning models (like `o1`, `o3`, or `luna`) reject the `temperature=1e-8` parameter forced by Ragas. The evaluator automatically detects reasoning models and dynamically overrides the Judge to use `gpt-4o-mini`, ensuring deterministic grading without HTTP 400 crashes.
+* **Telemetry & Async Isolation:** Aggressively disables Ragas background tracking and neuters `nest_asyncio` at the module level to prevent rogue tasks from throwing `Timeout should be used inside a task` errors.
+* **Unified Context Chunking:** Passes the Copilot's entire `### Evidence` block to the judge as a single cohesive chunk, preventing formatting headers (e.g., "Source:") from unfairly penalizing the Context Precision score.
+
+### Running the Evaluation
+
+The evaluation process requires two separate terminals to run the judge microservice and the orchestrator concurrently. 
+
+1. **Start the Evaluator Service (Terminal 1):**
+   ```bash
+   make rag_eval
+   # Runs: uv run python -m scripts.rag_evaluator
+   # Hosts the evaluation worker on [http://0.0.0.0:8001](http://0.0.0.0:8001)
+
+2. **Execute the Benchmark Suite (Terminal 2):**
+
+    ```Bash
+    make run_eval
+    # Runs: uv run python -m scripts.run_evaluation
+    # Triggers the Copilot and sends responses to the Evaluator
 
 ## Architecture
 The Copilot is built using a Python/FastAPI backend connected to a Neo4j Knowledge Graph. It utilizes an Agentic Orchestrator loop enforcing strict LLM routing:

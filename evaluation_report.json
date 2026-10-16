@@ -1,0 +1,22 @@
+[
+    {
+        "question": "What components depend on checkoutservice?",
+        "expected_answer": "frontend",
+        "copilot_answer": "The `frontend` component depends on `checkoutservice`.",
+        "eval_scores": {
+            "faithfulness": 0.0,
+            "answer_relevance": 0.0,
+            "context_precision": 0.0
+        }
+    },
+    {
+        "question": "What calls currencyservice?",
+        "expected_answer": "checkoutservice, frontend",
+        "copilot_answer": "The `currencyservice` is called by two components: `checkoutservice` and `frontend`.",
+        "eval_scores": {
+            "faithfulness": 0.0,
+            "answer_relevance": 0.0,
+            "context_precision": 0.0
+        }
+    }
+]

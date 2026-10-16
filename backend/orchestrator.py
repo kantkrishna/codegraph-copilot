@@ -27,17 +27,17 @@ SYSTEM_PROMPT = (
     "- Structural queries (e.g., dependencies, callers): Call `find_entity` first, then `find_dependencies` or `find_dependents`.\n"
     "- Semantic queries (e.g., how, why, explain): Use `hybrid_search`.\n"
     "- Hybrid queries: Use both.\n\n"
-    "STRICT FORMATTING RULES:\n"
-    "1. If a tool returns an empty result (e.g., 'not found' or []), DO NOT retry the tool. You MUST immediately stop and reply EXACTLY with:\n"
-    "   'I could not establish this from the indexed code and documentation.'\n"
-    "2. Otherwise, ground all answers strictly in the tool results and output using this exact Markdown format:\n\n"
+    "STRICT FORMATTING AND ANSWERING RULES:\n"
+    "1. If a tool returns an empty result, output EXACTLY: 'I could not establish this from the indexed code and documentation.'\n"
+    "2. ANSWER RELEVANCY: Your ### Answer MUST begin by directly repeating the core subject of the user's prompt (e.g., if asked 'What components depend on X?', start with 'The components that depend on X are...').\n"
+    "3. VOCABULARY ALIGNMENT: If you translate a Knowledge Graph 'DEPENDS_ON' relationship to 'calls' to match the user's prompt, you MUST use the word 'calls' in BOTH your ### Answer and your ### Evidence blocks. Do not use 'calls' in the answer and 'depends on' in the evidence.\n"
+    "4. Output using this exact Markdown format:\n\n"
     "### Answer\n"
-    "[Concise engineering answer here]\n\n"
+    "[Descriptive answer mirroring the prompt's structure]\n\n"
     "### Flow\n"
     "[Optional ordered steps]\n\n"
     "### Evidence\n"
-    "- Knowledge Graph: [List KG facts]\n"
-    "- Source: [List source files]\n\n"
+    "[Write full sentences detailing the facts. Match the exact vocabulary used in your Answer]\n\n"
     "### Confidence\n"
     "[High/Medium/Low]\n\n"
     "Do not expose internal reasoning."
@@ -102,12 +102,20 @@ def run_chat_cycle(prompt: str, kg_client: KGClient, rag_client: RAGClient) -> s
     max_turns = 5
     
     for _ in range(max_turns):
-        response = client.chat.completions.create(
-            model=settings.llm_model,
-            messages=messages,
-            tools=KG_TOOLS,
-            tool_choice="auto",
-        )
+        # 1. Build the dynamic kwargs for the OpenAI client
+        api_kwargs = {
+            "model": settings.llm_model,
+            "messages": messages,
+            "tools": KG_TOOLS,
+            "tool_choice": "auto",
+        }
+        
+        # 2. Prevent HTTP 400 crashes for OpenAI Reasoning models when using tools
+        if any(m in settings.llm_model.lower() for m in ["luna", "o1", "o3"]):
+            api_kwargs["reasoning_effort"] = "none"
+
+        # 3. Pass the unpacked dictionary to the client
+        response = client.chat.completions.create(**api_kwargs)
         
         response_message = response.choices[0].message
         

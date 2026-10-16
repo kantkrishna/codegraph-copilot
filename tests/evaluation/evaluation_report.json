@@ -1,0 +1,34 @@
+[
+    {
+        "case_id": 1,
+        "category": "Structural",
+        "question": "What components depend on checkoutservice?",
+        "expected_answer": "The component that depends on `checkoutservice` is the `frontend` service.",
+        "copilot_answer": "The component that depends on checkoutservice is **frontend**.",
+        "raw_response": "### Answer\nThe component that depends on checkoutservice is **frontend**.\n\n### Flow\n1. The frontend depends on checkoutservice.\n\n### Evidence\nThe indexed dependency relationship shows that frontend depends on checkoutservice.\n\n### Confidence\nHigh",
+        "contexts_used": [
+            "The indexed dependency relationship shows that frontend depends on checkoutservice."
+        ],
+        "scores": {
+            "faithfulness": 1.0,
+            "answer_relevance": 0.9135,
+            "context_precision": 1.0
+        }
+    },
+    {
+        "case_id": 2,
+        "category": "Structural",
+        "question": "What calls currencyservice?",
+        "expected_answer": "The `currencyservice` is called by both the `checkoutservice` and the `frontend` services.",
+        "copilot_answer": "The components that call currencyservice are checkoutservice and frontend.",
+        "raw_response": "### Answer\nThe components that call currencyservice are checkoutservice and frontend.\n\n### Flow\n- checkoutservice calls currencyservice.\n- frontend calls currencyservice.\n\n### Evidence\nThe indexed dependency graph shows that checkoutservice calls currencyservice. It also shows that frontend calls currencyservice.\n\n### Confidence\nHigh",
+        "contexts_used": [
+            "The indexed dependency graph shows that checkoutservice calls currencyservice. It also shows that frontend calls currencyservice."
+        ],
+        "scores": {
+            "faithfulness": 1.0,
+            "answer_relevance": 0.8353,
+            "context_precision": 1.0
+        }
+    }
+]

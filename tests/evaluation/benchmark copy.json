@@ -1,0 +1,102 @@
+[
+    {
+        "question": "What components depend on checkoutservice?",
+        "expected_answer": "frontend",
+        "category": "Structural"
+    },
+    {
+        "question": "What calls currencyservice?",
+        "expected_answer": "checkoutservice, frontend",
+        "category": "Structural"
+    },
+    {
+        "question": "What services does checkoutservice depend on?",
+        "expected_answer": "shippingservice, paymentservice, emailservice, currencyservice, productcatalogservice, cartservice",
+        "category": "Structural"
+    },
+    {
+        "question": "What component calls the recommendationservice?",
+        "expected_answer": "frontend",
+        "category": "Structural"
+    },
+    {
+        "question": "Which service handles order fulfillment?",
+        "expected_answer": "shippingservice",
+        "category": "Semantic"
+    },
+    {
+        "question": "Explain how the checkout flow works.",
+        "expected_answer": "Frontend calls CheckoutService, which orchestrates payments, shipping, and email.",
+        "category": "Semantic"
+    },
+    {
+        "question": "Where is the product catalog data managed?",
+        "expected_answer": "productcatalogservice",
+        "category": "Semantic"
+    },
+    {
+        "question": "How are items added to the cart?",
+        "expected_answer": "Frontend communicates with cartservice via gRPC.",
+        "category": "Semantic"
+    },
+    {
+        "question": "How is the currency conversion calculated?",
+        "expected_answer": "currencyservice converts localized prices using conversion rates.",
+        "category": "Semantic"
+    },
+    {
+        "question": "What happens when an order is placed?",
+        "expected_answer": "CheckoutService processes payment, ships items, empties cart, and emails receipt.",
+        "category": "Semantic"
+    },
+    {
+        "question": "Where is the logic for processing customer payments implemented?",
+        "expected_answer": "paymentservice",
+        "category": "Semantic"
+    },
+    {
+        "question": "What does adservice do?",
+        "expected_answer": "Provides targeted text ads based on context words.",
+        "category": "Semantic"
+    },
+    {
+        "question": "How does the frontend communicate with the backend services?",
+        "expected_answer": "Via gRPC",
+        "category": "Semantic"
+    },
+    {
+        "question": "What calls emailservice, and how are emails formatted?",
+        "expected_answer": "checkoutservice calls it; emails are formatted using Jinja/HTML templates.",
+        "category": "Hybrid"
+    },
+    {
+        "question": "What components call paymentservice, and how is the card validated?",
+        "expected_answer": "checkoutservice calls it; validates Luhn algorithm/card details.",
+        "category": "Hybrid"
+    },
+    {
+        "question": "What depends on cartservice, and how is session data stored?",
+        "expected_answer": "checkoutservice and frontend; stored in Redis.",
+        "category": "Hybrid"
+    },
+    {
+        "question": "What calls shippingservice, and how is shipping calculated?",
+        "expected_answer": "checkoutservice calls it; shipping is flat-rate or based on item count.",
+        "category": "Hybrid"
+    },
+    {
+        "question": "How does the QuantumTeleportService work?",
+        "expected_answer": "I could not establish this from the indexed code and documentation.",
+        "category": "Out-of-Scope"
+    },
+    {
+        "question": "Explain how the authentication flow works.",
+        "expected_answer": "I could not establish this from the indexed code and documentation.",
+        "category": "Out-of-Scope"
+    },
+    {
+        "question": "Where is the user profile logic implemented?",
+        "expected_answer": "I could not establish this from the indexed code and documentation.",
+        "category": "Out-of-Scope"
+    }
+]
